@@ -1,0 +1,26 @@
+{
+  "name": "zarinpal-merchant-intelligence",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Frontend foundation for a traceable merchant decision intelligence platform.",
+  "packageManager": "pnpm@11.22.0",
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=11.0.0"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @zarinpal/web dev",
+    "build": "pnpm --filter @zarinpal/web build",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "pnpm --filter @zarinpal/web lint",
+    "typecheck": "pnpm --filter @zarinpal/web typecheck",
+    "test": "pnpm --filter @zarinpal/web test",
+    "test:watch": "pnpm --filter @zarinpal/web test:watch",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build"
+  },
+  "devDependencies": {
+    "prettier": "^3.6.2",
+    "prettier-plugin-tailwindcss": "^0.6.14"
+  }
+}

@@ -96,6 +96,7 @@ export interface AnalysisUnitOption extends FilterOption<AnalysisUnit> {
 }
 
 export interface FilterOptions {
+  dateRange: { from: string; to: string; timezone: string };
   categories: Array<FilterOption & { id: string }>;
   statuses: Array<FilterOption<"succeeded" | "failed" | "pending">>;
   terminals: FilterOption[];
@@ -1053,6 +1054,7 @@ class DefaultMerchantIntelligenceService implements MerchantIntelligenceService 
       );
     return {
       data: {
+        dateRange: datasetDateRange(snapshot),
         categories: categoryOptions.slice(0, MAX_FILTER_OPTIONS),
         statuses: [
           { value: "succeeded", label: "Succeeded" },

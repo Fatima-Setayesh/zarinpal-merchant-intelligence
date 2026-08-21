@@ -226,6 +226,10 @@ describe("merchant intelligence HTTP API", () => {
           metricId: string;
           value: number | null;
           analysisUnit: string;
+          traceability?: {
+            filters: { merchantIds?: string[] };
+            provenance: { datasetId: string; sourceReference: string };
+          };
         }>;
       };
       appliedFilters: {
@@ -269,6 +273,17 @@ describe("merchant intelligence HTTP API", () => {
         (metric) => metric.analysisUnit === "payment_session",
       ),
     ).toBe(true);
+    expect(
+      body.data.headlineMetrics.find(
+        (metric) => metric.metricId === "payment-session-count",
+      )?.traceability,
+    ).toMatchObject({
+      filters: { merchantIds: ["merchant-1"] },
+      provenance: {
+        datasetId: "dataset-test",
+        sourceReference: "dataset:dataset-test",
+      },
+    });
   });
 
   it("advertises endpoint-specific analysis-unit support", async () => {
@@ -277,6 +292,7 @@ describe("merchant intelligence HTTP API", () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as {
       data: {
+        dateRange: { from: string; to: string; timezone: string };
         analysisUnits: Array<{
           value: string;
           supportedEndpoints: string[];
@@ -295,6 +311,88 @@ describe("merchant intelligence HTTP API", () => {
           supportedEndpoints: ["trends"],
         }),
       ]),
+    );
+    expect(body.data.dateRange).toEqual({
+      from: "2026-01-01T08:00:00.000Z",
+      to: "2026-01-03T10:00:00.000Z",
+      timezone: "UTC",
+    });
+  });
+
+  it("exposes aggregate insights, traces, trends, and segments through the API", async () => {
+    const url = await startApi(
+      new InMemoryPaymentAttemptRepository(attempts, {
+        datasetId: "dataset-test",
+      }),
+    );
+    const post = (path: string, filters: Record<string, unknown>) =>
+      fetch(`${url}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ filters, page: { limit: 20 } }),
+      });
+    const [insightsResponse, trendsResponse, segmentsResponse] =
+      await Promise.all([
+        post("/api/v1/insights/query", { merchantIds: ["merchant-1"] }),
+        post("/api/v1/trends/query", { merchantIds: ["merchant-1"] }),
+        post("/api/v1/segments/query", {}),
+      ]);
+
+    expect([
+      insightsResponse.status,
+      trendsResponse.status,
+      segmentsResponse.status,
+    ]).toEqual([200, 200, 200]);
+    const insights = (await insightsResponse.json()) as {
+      page: {
+        items: Array<{
+          evidence: Array<{ metric: { traceability?: unknown } }>;
+        }>;
+      };
+    };
+    const trends = (await trendsResponse.json()) as {
+      page: {
+        items: Array<{
+          traceability?: unknown;
+          points: Array<{ sampleSize?: number }>;
+        }>;
+      };
+    };
+    const segments = (await segmentsResponse.json()) as {
+      page: {
+        items: Array<{
+          metrics: Array<{ traceability?: { referencePopulation?: unknown } }>;
+        }>;
+      };
+    };
+
+    expect(insights.page.items.length).toBeGreaterThan(0);
+    expect(trends.page.items.length).toBeGreaterThan(0);
+    expect(segments.page.items.length).toBeGreaterThan(0);
+    expect(
+      insights.page.items.every((insight) =>
+        insight.evidence.every(
+          (evidence) => evidence.metric.traceability !== undefined,
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      trends.page.items.every(
+        (series) =>
+          series.traceability !== undefined &&
+          series.points.every((point) => point.sampleSize !== undefined),
+      ),
+    ).toBe(true);
+    expect(
+      segments.page.items.every((segment) =>
+        segment.metrics.every(
+          (metric) =>
+            metric.traceability?.referencePopulation !== undefined,
+        ),
+      ),
+    ).toBe(true);
+    expect(JSON.stringify([insights, trends, segments])).not.toContain(
+      '"attemptId"',
     );
   });
 

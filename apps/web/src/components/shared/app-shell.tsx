@@ -17,7 +17,7 @@ export function AppShell({ children }: AppShellProps) {
       </a>
 
       <header className="sticky top-0 z-40 border-b border-border/80 bg-background/90 backdrop-blur-xl">
-        <div className="mx-auto flex min-h-16 w-full max-w-7xl items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
+        <div className="mx-auto flex min-h-16 w-full max-w-[92rem] items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
           <a
             href="/"
             className="group flex min-w-0 items-center gap-3 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-4"
@@ -41,15 +41,23 @@ export function AppShell({ children }: AppShellProps) {
 
           <div className="flex items-center gap-3">
             <nav aria-label="Primary navigation" className="hidden md:block">
-              <a
-                href="#workspace"
-                aria-current="page"
-                className="inline-flex min-h-11 items-center rounded-full px-4 text-sm font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                Merchant intelligence
-              </a>
+              <div className="flex items-center gap-1 rounded-full border border-border bg-muted/45 p-1">
+                <a
+                  href="#main-content"
+                  aria-current="page"
+                  className="inline-flex min-h-9 items-center rounded-full bg-card px-4 text-sm font-semibold text-foreground shadow-sm transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  Overview
+                </a>
+                <a
+                  href="#insight-feed-title"
+                  className="inline-flex min-h-9 items-center rounded-full px-4 text-sm font-medium text-muted-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  Insights
+                </a>
+              </div>
             </nav>
-            <Badge variant="positive">Foundation ready</Badge>
+            <Badge variant="warning">Frontend preview</Badge>
           </div>
         </div>
       </header>
@@ -57,9 +65,9 @@ export function AppShell({ children }: AppShellProps) {
       <main id="main-content">{children}</main>
 
       <footer className="border-t border-border/80 bg-card/60">
-        <div className="mx-auto flex w-full max-w-7xl flex-col gap-2 px-4 py-8 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-8">
-          <p>Zarinpal Challenge · Frontend foundation</p>
-          <p>No merchant data or analytical output is loaded.</p>
+        <div className="mx-auto flex w-full max-w-[92rem] flex-col gap-2 px-4 py-8 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-8">
+          <p>Zarinpal Challenge · Merchant Decision Intelligence</p>
+          <p>Demo / Placeholder · No verified merchant analysis is loaded.</p>
         </div>
       </footer>
     </div>

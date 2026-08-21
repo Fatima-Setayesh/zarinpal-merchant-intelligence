@@ -5,7 +5,7 @@ import { App } from "@/app/app";
 import { AppProviders } from "@/app/providers";
 
 describe("App", () => {
-  it("renders the decision intelligence foundation without analytical claims", () => {
+  it("renders a decision-first dashboard with explicit demo labeling", () => {
     render(
       <AppProviders>
         <App />
@@ -14,13 +14,22 @@ describe("App", () => {
 
     expect(
       screen.getByRole("heading", {
-        name: "Turn payment evidence into confident merchant actions.",
+        name: "Know what matters before opening a chart.",
       }),
     ).toBeInTheDocument();
-    expect(screen.getByText("Raw data")).toBeInTheDocument();
-    expect(screen.getAllByText("Demo / Placeholder")).toHaveLength(2);
+    expect(screen.getAllByText("Demo / Placeholder").length).toBeGreaterThan(0);
     expect(
-      screen.getByText(/does not contain merchant metrics/i),
+      screen.getByRole("heading", {
+        name: "Evidence translated into next actions",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /session and attempt units remain explicitly separated/i,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/no verified merchant analysis/i),
     ).toBeInTheDocument();
   });
 });

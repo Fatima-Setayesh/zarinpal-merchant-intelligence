@@ -18,6 +18,9 @@
   --color-accent-foreground: var(--accent-foreground);
   --color-border: var(--border);
   --color-ring: var(--ring);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-critical: var(--critical);
 }
 
 :root {
@@ -36,6 +39,12 @@
   --accent-foreground: oklch(0.24 0.04 60);
   --border: oklch(0.9 0.012 270);
   --ring: oklch(0.58 0.18 286);
+  --success: oklch(0.56 0.16 154);
+  --success-soft: oklch(0.95 0.055 154);
+  --warning: oklch(0.68 0.16 72);
+  --warning-soft: oklch(0.96 0.055 80);
+  --critical: oklch(0.58 0.21 22);
+  --critical-soft: oklch(0.95 0.045 22);
 }
 
 * {
@@ -55,6 +64,10 @@ body {
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+}
+
+body:has(dialog[open]) {
+  overflow: hidden;
 }
 
 button,
@@ -103,6 +116,185 @@ textarea:focus-visible {
     auto,
     auto;
   background-position: center;
+}
+
+.dashboard-canvas {
+  background-color: var(--background);
+  background-image:
+    radial-gradient(
+      circle at 78% 0%,
+      color-mix(in oklab, var(--primary) 8%, transparent),
+      transparent 26rem
+    ),
+    linear-gradient(
+      to right,
+      color-mix(in oklab, var(--border) 30%, transparent) 1px,
+      transparent 1px
+    );
+  background-size:
+    auto,
+    80px 80px;
+}
+
+.eyebrow {
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.17em;
+  color: var(--primary);
+  text-transform: uppercase;
+}
+
+.filter-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--foreground);
+}
+
+.decision-step + .decision-step {
+  border-top: 1px solid var(--border);
+}
+
+.decision-step[data-tone="status"] {
+  color: oklch(0.45 0.13 154);
+}
+
+.decision-step[data-tone="problem"] {
+  color: var(--critical);
+}
+
+.decision-step[data-tone="opportunity"] {
+  color: oklch(0.55 0.15 286);
+}
+
+.decision-step[data-tone="action"] {
+  color: oklch(0.56 0.14 72);
+}
+
+.trace-disclosure {
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: color-mix(in oklab, var(--muted) 48%, var(--card));
+  padding: 0.9rem 1rem;
+}
+
+.trace-disclosure summary {
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 700;
+  list-style-position: outside;
+}
+
+.trace-disclosure summary::marker {
+  color: var(--primary);
+}
+
+.trace-disclosure summary:focus-visible {
+  border-radius: 0.35rem;
+  outline: 2px solid var(--ring);
+  outline-offset: 4px;
+}
+
+.app-sheet {
+  opacity: 0;
+  transform: translateX(1.5rem);
+  transition:
+    opacity 180ms ease,
+    transform 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    overlay 240ms allow-discrete,
+    display 240ms allow-discrete;
+}
+
+.app-sheet[open] {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+@starting-style {
+  .app-sheet[open] {
+    opacity: 0;
+    transform: translateX(1.5rem);
+  }
+}
+
+.app-sheet::backdrop {
+  background: rgba(23, 19, 46, 0.42);
+  opacity: 0;
+  backdrop-filter: blur(3px);
+  transition:
+    opacity 180ms ease,
+    overlay 240ms allow-discrete,
+    display 240ms allow-discrete;
+}
+
+.app-sheet[open]::backdrop {
+  opacity: 1;
+}
+
+@starting-style {
+  .app-sheet[open]::backdrop {
+    opacity: 0;
+  }
+}
+
+.chart-point:focus circle:last-of-type {
+  filter: drop-shadow(
+    0 0 7px color-mix(in oklab, var(--primary) 65%, transparent)
+  );
+  stroke-width: 5;
+}
+
+.skeleton-sheen {
+  animation: skeleton-sheen 1.8s ease-in-out infinite;
+}
+
+@keyframes skeleton-sheen {
+  0% {
+    background-position: 130% 0;
+  }
+
+  100% {
+    background-position: -90% 0;
+  }
+}
+
+@media (min-width: 640px) {
+  .decision-step:nth-child(2n) {
+    border-left: 1px solid var(--border);
+  }
+
+  .decision-step:nth-child(-n + 2) {
+    border-top: 0;
+  }
+}
+
+@media (min-width: 1280px) {
+  .decision-step + .decision-step {
+    border-top: 0;
+    border-left: 1px solid var(--border);
+  }
+}
+
+@media (max-width: 639px) {
+  .app-sheet {
+    inset: auto 0 0;
+    width: 100%;
+    height: min(92dvh, 52rem);
+    max-height: 92dvh;
+    border-top: 1px solid var(--border);
+    border-left: 0;
+    border-radius: 1.4rem 1.4rem 0 0;
+    transform: translateY(1.5rem);
+  }
+
+  .app-sheet[open] {
+    transform: translateY(0);
+  }
+
+  @starting-style {
+    .app-sheet[open] {
+      transform: translateY(1.5rem);
+    }
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

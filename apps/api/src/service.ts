@@ -19,9 +19,10 @@ import type {
   PageRequest,
   PageResult,
   PaymentAttempt,
+  PaymentSession,
   Segment,
 } from "./domain.js";
-import { parseRfc3339Timestamp } from "./domain.js";
+import { buildPaymentSessions, parseRfc3339Timestamp } from "./domain.js";
 import {
   DataUnavailableError,
   NotFoundError,
@@ -403,10 +404,16 @@ const validateDimensionConsistency = (
   }
 };
 
+const snapshotSessions = (
+  snapshot: RepositorySnapshot,
+): readonly PaymentSession[] =>
+  snapshot.sessions ?? buildPaymentSessions(snapshot.attempts);
+
 const datasetDateRange = (
   snapshot: RepositorySnapshot,
 ): { from: string; to: string; timezone: string } => {
-  if (snapshot.attempts.length === 0) {
+  const sessions = snapshotSessions(snapshot);
+  if (snapshot.attempts.length === 0 && sessions.length === 0) {
     return {
       from: new Date(snapshot.loadedAt).toISOString(),
       to: new Date(snapshot.loadedAt).toISOString(),
@@ -417,6 +424,11 @@ const datasetDateRange = (
   let maximum = Number.NEGATIVE_INFINITY;
   for (const attempt of snapshot.attempts) {
     const timestamp = Date.parse(attempt.occurredAt);
+    minimum = Math.min(minimum, timestamp);
+    maximum = Math.max(maximum, timestamp);
+  }
+  for (const session of sessions) {
+    const timestamp = Date.parse(session.observedAt);
     minimum = Math.min(minimum, timestamp);
     maximum = Math.max(maximum, timestamp);
   }
@@ -710,6 +722,7 @@ const paginate = <T>(
 
 const merchantDirectory = (
   attempts: readonly PaymentAttempt[],
+  sessions: readonly PaymentSession[] = [],
 ): MerchantListItem[] => {
   const merchants = new Map<string, MerchantListItem>();
   const ambiguousCategories = new Set<string>();
@@ -744,6 +757,31 @@ const merchantDirectory = (
       existing.displayName = attempt.merchantDisplayName;
     }
   }
+  for (const session of sessions) {
+    const existing = merchants.get(session.merchantId);
+    if (existing === undefined) {
+      merchants.set(session.merchantId, {
+        merchantId: session.merchantId,
+        displayName: session.merchantId,
+        ...(session.merchantCategory !== undefined
+          ? { category: { ...session.merchantCategory } }
+          : {}),
+      });
+      continue;
+    }
+    if (
+      existing.category !== undefined &&
+      session.merchantCategory !== undefined &&
+      existing.category.id !== session.merchantCategory.id
+    ) {
+      ambiguousCategories.add(session.merchantId);
+    } else if (
+      existing.category === undefined &&
+      session.merchantCategory !== undefined
+    ) {
+      existing.category = { ...session.merchantCategory };
+    }
+  }
   for (const merchantId of ambiguousCategories) {
     const merchant = merchants.get(merchantId);
     if (merchant !== undefined) {
@@ -767,7 +805,12 @@ const requireMerchant = (
   merchantId: string,
 ): string => {
   const normalized = readString(merchantId, "merchantId");
-  if (!snapshot.attempts.some((attempt) => attempt.merchantId === normalized)) {
+  if (
+    !snapshot.attempts.some((attempt) => attempt.merchantId === normalized) &&
+    !snapshotSessions(snapshot).some(
+      (session) => session.merchantId === normalized,
+    )
+  ) {
     throw new NotFoundError("Merchant was not found in the current dataset.", {
       merchantId: normalized,
     });
@@ -925,7 +968,10 @@ class DefaultMerchantIntelligenceService implements MerchantIntelligenceService 
 
     const snapshot = await this.#getSnapshot();
     const normalizedSearch = search?.toLocaleLowerCase("en");
-    const values = merchantDirectory(snapshot.attempts).filter(
+    const values = merchantDirectory(
+      snapshot.attempts,
+      snapshotSessions(snapshot),
+    ).filter(
       (merchant) =>
         (normalizedSearch === undefined ||
           merchant.merchantId
@@ -955,6 +1001,7 @@ class DefaultMerchantIntelligenceService implements MerchantIntelligenceService 
     const terminals = new Set<string>();
     const issuers = new Set<string>();
     const attemptsBySession = new Map<string, number>();
+    const sessions = snapshotSessions(snapshot);
     for (const attempt of snapshot.attempts) {
       if (attempt.merchantCategory !== undefined) {
         categories.set(
@@ -972,6 +1019,21 @@ class DefaultMerchantIntelligenceService implements MerchantIntelligenceService 
         attempt.sessionId,
         (attemptsBySession.get(attempt.sessionId) ?? 0) + 1,
       );
+    }
+    for (const session of sessions) {
+      if (session.merchantCategory !== undefined) {
+        categories.set(
+          session.merchantCategory.id,
+          session.merchantCategory.label,
+        );
+      }
+      if (session.terminalId !== undefined) {
+        terminals.add(session.terminalId);
+      }
+      if (session.issuer !== undefined) {
+        issuers.add(session.issuer);
+      }
+      attemptsBySession.set(session.sessionId, session.attempts.length);
     }
     const categoryOptions = [...categories]
       .map(([id, label]) => ({ id, value: id, label }))
@@ -1004,7 +1066,10 @@ class DefaultMerchantIntelligenceService implements MerchantIntelligenceService 
           .slice(0, MAX_FILTER_OPTIONS)
           .map((value) => ({ value, label: value })),
         amountRange: numericRange(
-          snapshot.attempts.map((attempt) => attempt.amount),
+          [
+            ...snapshot.attempts.map((attempt) => attempt.amount),
+            ...sessions.map((session) => session.representativeAmount),
+          ],
         ),
         attemptCountRange: numericRange(attemptsBySession.values()),
         analysisUnits: [
@@ -1072,6 +1137,7 @@ class DefaultMerchantIntelligenceService implements MerchantIntelligenceService 
         scopedMerchantId,
         appliedFilters,
         provenance,
+        snapshotSessions(snapshot),
       ),
       appliedFilters,
       warnings: warningsFor(snapshot),
@@ -1090,6 +1156,7 @@ class DefaultMerchantIntelligenceService implements MerchantIntelligenceService 
       merchantId,
       query.filters,
       provenance,
+      snapshotSessions(snapshot),
     );
     return {
       appliedFilters: query.filters,
@@ -1112,6 +1179,7 @@ class DefaultMerchantIntelligenceService implements MerchantIntelligenceService 
       merchantId,
       query.filters,
       provenance,
+      snapshotSessions(snapshot),
     );
     return {
       appliedFilters: query.filters,
@@ -1136,6 +1204,7 @@ class DefaultMerchantIntelligenceService implements MerchantIntelligenceService 
       snapshot.attempts,
       query.filters,
       provenance,
+      snapshotSessions(snapshot),
     );
     return {
       appliedFilters: query.filters,

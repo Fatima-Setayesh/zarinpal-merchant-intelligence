@@ -2,6 +2,39 @@ export type AnalysisUnit = "payment_session" | "payment_attempt";
 
 export type PaymentAttemptStatus = "succeeded" | "failed" | "pending";
 
+export type ChallengeSessionStatus =
+  | "Failed"
+  | "Verified"
+  | "Paid"
+  | "Reversed";
+export type ChallengeAttemptStatus =
+  "Failed" | "InBank" | "Verified" | "NoAttempt" | "Paid" | "Reversed";
+
+export const CHALLENGE_DATA_COLUMNS = [
+  "session_key",
+  "try_seq",
+  "terminal_key",
+  "merchant_key",
+  "category_id",
+  "category_title",
+  "amount",
+  "adjusted_fee",
+  "session_status",
+  "try_status",
+  "switch_response_code",
+  "psp_code",
+  "issuer_bank_code",
+  "payer_card_key",
+  "verify_type",
+  "init_time_ms",
+  "verify_time_ms",
+  "created_at",
+  "try_created_at",
+  "verified_at",
+  "settled_at",
+  "expire_in",
+] as const;
+
 const RFC3339_TIMESTAMP_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,3})?(?:Z|[+-](\d{2}):(\d{2}))$/u;
 
@@ -57,22 +90,44 @@ export interface PaymentAttempt {
   amount: number;
   currency: string;
   status: PaymentAttemptStatus;
+  /** Confidentially transformed; never Zarinpal's real fee or an absolute pricing value. */
   adjustedFee?: number | null;
   terminalId?: string;
   issuer?: string;
   merchantDisplayName?: string;
   merchantCategory?: MerchantCategory;
+  attemptSequence?: number;
+  sourceSessionStatus?: ChallengeSessionStatus;
+  sourceAttemptStatus?: ChallengeAttemptStatus;
+  switchResponseCode?: string;
+  pspCode?: string;
+  payerCardKey?: string;
+  verifyType?: string;
+  initTimeMs?: number;
+  verifyTimeMs?: number;
+  sessionCreatedAt?: string;
+  verifiedAt?: string;
+  settledAt?: string;
+  expiresAt?: string;
 }
 
 export interface PaymentSession {
   sessionId: string;
   merchantId: string;
-  firstAttemptAt: string;
-  lastAttemptAt: string;
+  observedAt: string;
+  firstAttemptAt?: string;
+  lastAttemptAt?: string;
   representativeAmount: number;
   currency: string;
   outcome: PaymentAttemptStatus;
   attempts: PaymentAttempt[];
+  /** Confidentially transformed; never Zarinpal's real fee or an absolute pricing value. */
+  adjustedFee?: number | null;
+  terminalId?: string;
+  issuer?: string;
+  merchantCategory?: MerchantCategory;
+  sourceSessionStatus?: ChallengeSessionStatus;
+  sourceAttemptStatus?: "NoAttempt";
 }
 
 export interface DateRange {
@@ -250,6 +305,418 @@ export class DomainValidationError extends Error {
     this.issues = issues;
   }
 }
+
+export interface ChallengeRowMappingResult {
+  readonly attempt: PaymentAttempt | null;
+  readonly session: PaymentSession | null;
+  readonly exclusionReason: "no_attempt" | null;
+  readonly missingAdjustedFee: boolean;
+  readonly missingIssuer: boolean;
+}
+
+const CHALLENGE_TIMESTAMP_PATTERN =
+  /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?$/u;
+const CHALLENGE_OFFSET_PATTERN = /^([+-])(\d{2}):(\d{2})$/u;
+
+export const normalizeChallengeDataUtcOffset = (value: string): string => {
+  const normalized = value.trim().toUpperCase();
+  if (normalized === "Z") {
+    return normalized;
+  }
+  const match = CHALLENGE_OFFSET_PATTERN.exec(normalized);
+  const hours = Number(match?.[2]);
+  const minutes = Number(match?.[3]);
+  if (
+    match === null ||
+    hours > 14 ||
+    minutes > 59 ||
+    (hours === 14 && minutes !== 0)
+  ) {
+    throw new DomainValidationError("Invalid challenge-data UTC offset", [
+      {
+        path: "challengeDataUtcOffset",
+        message: "must be Z or a UTC offset from -14:00 through +14:00",
+      },
+    ]);
+  }
+  return normalized;
+};
+
+export const validateChallengeCsvHeader = (fields: readonly string[]): void => {
+  const normalized = fields.map((field, index) =>
+    index === 0 ? field.replace(/^\uFEFF/u, "") : field,
+  );
+  if (
+    normalized.length !== CHALLENGE_DATA_COLUMNS.length ||
+    normalized.some((field, index) => field !== CHALLENGE_DATA_COLUMNS[index])
+  ) {
+    throw new DomainValidationError("Invalid challenge CSV schema", [
+      {
+        path: "challengeData.header",
+        message: `must exactly match: ${CHALLENGE_DATA_COLUMNS.join(",")}`,
+      },
+    ]);
+  }
+};
+
+const challengePath = (rowNumber: number, column: string): string =>
+  `challengeData.rows[${rowNumber}].${column}`;
+
+const isMissingChallengeValue = (value: string | undefined): boolean => {
+  const normalized = value?.trim();
+  return (
+    normalized === undefined ||
+    normalized.length === 0 ||
+    normalized.toLowerCase() === "null" ||
+    normalized === "\\N"
+  );
+};
+
+const readChallengeRequiredString = (
+  value: string | undefined,
+  rowNumber: number,
+  column: string,
+): string => {
+  if (isMissingChallengeValue(value)) {
+    throw new DomainValidationError("Invalid challenge dataset row", [
+      {
+        path: challengePath(rowNumber, column),
+        message: "must be a non-empty value",
+      },
+    ]);
+  }
+  return value?.trim() ?? "";
+};
+
+const readChallengeOptionalString = (
+  value: string | undefined,
+): string | undefined =>
+  isMissingChallengeValue(value) ? undefined : value?.trim();
+
+const readChallengeInteger = (
+  value: string | undefined,
+  rowNumber: number,
+  column: string,
+  required: boolean,
+): number | undefined => {
+  if (isMissingChallengeValue(value)) {
+    if (!required) {
+      return undefined;
+    }
+    throw new DomainValidationError("Invalid challenge dataset row", [
+      {
+        path: challengePath(rowNumber, column),
+        message: "must be a non-negative safe integer",
+      },
+    ]);
+  }
+  const normalized = value?.trim() ?? "";
+  const parsed = Number(normalized);
+  if (!/^\d+$/u.test(normalized) || !Number.isSafeInteger(parsed)) {
+    throw new DomainValidationError("Invalid challenge dataset row", [
+      {
+        path: challengePath(rowNumber, column),
+        message: "must be a non-negative safe integer",
+      },
+    ]);
+  }
+  return parsed;
+};
+
+const readChallengeTimestamp = (
+  value: string | undefined,
+  rowNumber: number,
+  column: string,
+  utcOffset: string,
+  required: boolean,
+): string | undefined => {
+  if (isMissingChallengeValue(value)) {
+    if (!required) {
+      return undefined;
+    }
+    throw new DomainValidationError("Invalid challenge dataset row", [
+      {
+        path: challengePath(rowNumber, column),
+        message: "must contain a challenge timestamp",
+      },
+    ]);
+  }
+  const normalized = value?.trim() ?? "";
+  if (!CHALLENGE_TIMESTAMP_PATTERN.test(normalized)) {
+    throw new DomainValidationError("Invalid challenge dataset row", [
+      {
+        path: challengePath(rowNumber, column),
+        message: "must use YYYY-MM-DD HH:mm:ss with optional milliseconds",
+      },
+    ]);
+  }
+  const timestamp = `${normalized.replace(" ", "T")}${utcOffset}`;
+  const parsed = parseRfc3339Timestamp(timestamp);
+  if (parsed === null) {
+    throw new DomainValidationError("Invalid challenge dataset row", [
+      {
+        path: challengePath(rowNumber, column),
+        message: "must contain a valid calendar date and time",
+      },
+    ]);
+  }
+  return new Date(parsed).toISOString();
+};
+
+export const mapChallengeCsvRow = (
+  fields: readonly string[],
+  rowNumber: number,
+  sourceUtcOffset: string,
+): ChallengeRowMappingResult => {
+  if (fields.length !== CHALLENGE_DATA_COLUMNS.length) {
+    throw new DomainValidationError("Invalid challenge dataset row", [
+      {
+        path: `challengeData.rows[${rowNumber}]`,
+        message: `must contain exactly ${CHALLENGE_DATA_COLUMNS.length} columns`,
+      },
+    ]);
+  }
+  const utcOffset = normalizeChallengeDataUtcOffset(sourceUtcOffset);
+  const sessionKey = readChallengeRequiredString(
+    fields[0],
+    rowNumber,
+    "session_key",
+  );
+  const attemptSequence = readChallengeInteger(
+    fields[1],
+    rowNumber,
+    "try_seq",
+    true,
+  );
+  const terminalId = readChallengeOptionalString(fields[2]);
+  const merchantId = readChallengeRequiredString(
+    fields[3],
+    rowNumber,
+    "merchant_key",
+  );
+  const categoryId = readChallengeOptionalString(fields[4]);
+  const categoryLabel = readChallengeOptionalString(fields[5]);
+  if ((categoryId === undefined) !== (categoryLabel === undefined)) {
+    throw new DomainValidationError("Invalid challenge dataset row", [
+      {
+        path: challengePath(rowNumber, "category_id"),
+        message: "category_id and category_title must be present together",
+      },
+    ]);
+  }
+  const amount = readChallengeInteger(fields[6], rowNumber, "amount", true);
+  const adjustedFee = readChallengeInteger(
+    fields[7],
+    rowNumber,
+    "adjusted_fee",
+    false,
+  );
+  const rawSessionStatus = readChallengeRequiredString(
+    fields[8],
+    rowNumber,
+    "session_status",
+  );
+  if (
+    rawSessionStatus !== "Failed" &&
+    rawSessionStatus !== "Verified" &&
+    rawSessionStatus !== "Paid" &&
+    rawSessionStatus !== "Reversed"
+  ) {
+    throw new DomainValidationError("Invalid challenge dataset row", [
+      {
+        path: challengePath(rowNumber, "session_status"),
+        message: "must be Failed, Verified, Paid, or Reversed",
+      },
+    ]);
+  }
+  const sourceSessionStatus: ChallengeSessionStatus = rawSessionStatus;
+  const rawAttemptStatus = readChallengeRequiredString(
+    fields[9],
+    rowNumber,
+    "try_status",
+  );
+  if (
+    rawAttemptStatus !== "Failed" &&
+    rawAttemptStatus !== "InBank" &&
+    rawAttemptStatus !== "Verified" &&
+    rawAttemptStatus !== "NoAttempt" &&
+    rawAttemptStatus !== "Paid" &&
+    rawAttemptStatus !== "Reversed"
+  ) {
+    throw new DomainValidationError("Invalid challenge dataset row", [
+      {
+        path: challengePath(rowNumber, "try_status"),
+        message:
+          "must be Failed, InBank, Verified, NoAttempt, Paid, or Reversed",
+      },
+    ]);
+  }
+  const sourceAttemptStatus: ChallengeAttemptStatus = rawAttemptStatus;
+  const switchResponseCode = readChallengeOptionalString(fields[10]);
+  const pspCode = readChallengeOptionalString(fields[11]);
+  const issuer = readChallengeOptionalString(fields[12]);
+  const payerCardKey = readChallengeOptionalString(fields[13]);
+  const verifyType = readChallengeOptionalString(fields[14]);
+  const initTimeMs = readChallengeInteger(
+    fields[15],
+    rowNumber,
+    "init_time_ms",
+    false,
+  );
+  const verifyTimeMs = readChallengeInteger(
+    fields[16],
+    rowNumber,
+    "verify_time_ms",
+    false,
+  );
+  const sessionCreatedAt = readChallengeTimestamp(
+    fields[17],
+    rowNumber,
+    "created_at",
+    utcOffset,
+    true,
+  );
+  const attemptCreatedAt = readChallengeTimestamp(
+    fields[18],
+    rowNumber,
+    "try_created_at",
+    utcOffset,
+    false,
+  );
+  const verifiedAt = readChallengeTimestamp(
+    fields[19],
+    rowNumber,
+    "verified_at",
+    utcOffset,
+    false,
+  );
+  const settledAt = readChallengeTimestamp(
+    fields[20],
+    rowNumber,
+    "settled_at",
+    utcOffset,
+    false,
+  );
+  const expiresAt = readChallengeTimestamp(
+    fields[21],
+    rowNumber,
+    "expire_in",
+    utcOffset,
+    false,
+  );
+
+  if (sourceAttemptStatus === "NoAttempt") {
+    if (
+      attemptSequence !== 0 ||
+      attemptCreatedAt !== undefined ||
+      sourceSessionStatus !== "Failed"
+    ) {
+      throw new DomainValidationError("Invalid challenge dataset row", [
+        {
+          path: challengePath(rowNumber, "try_status"),
+          message:
+            "NoAttempt rows must be failed sessions with try_seq 0 and no try_created_at value",
+        },
+      ]);
+    }
+    if (amount === undefined || sessionCreatedAt === undefined) {
+      throw new DomainValidationError("Invalid challenge dataset row", [
+        {
+          path: `challengeData.rows[${rowNumber}]`,
+          message: "is missing required session values",
+        },
+      ]);
+    }
+    return {
+      attempt: null,
+      session: {
+        sessionId: sessionKey,
+        merchantId,
+        observedAt: sessionCreatedAt,
+        representativeAmount: amount,
+        currency: "IRR",
+        outcome: "failed",
+        attempts: [],
+        adjustedFee: adjustedFee ?? null,
+        sourceSessionStatus,
+        sourceAttemptStatus,
+        ...(terminalId !== undefined ? { terminalId } : {}),
+        ...(issuer !== undefined ? { issuer } : {}),
+        ...(categoryId !== undefined && categoryLabel !== undefined
+          ? { merchantCategory: { id: categoryId, label: categoryLabel } }
+          : {}),
+      },
+      exclusionReason: "no_attempt",
+      missingAdjustedFee: adjustedFee === undefined,
+      missingIssuer: issuer === undefined,
+    };
+  }
+  if (attemptSequence === undefined || attemptSequence < 1) {
+    throw new DomainValidationError("Invalid challenge dataset row", [
+      {
+        path: challengePath(rowNumber, "try_seq"),
+        message: "must be at least 1 for a payment-attempt row",
+      },
+    ]);
+  }
+  if (attemptCreatedAt === undefined) {
+    throw new DomainValidationError("Invalid challenge dataset row", [
+      {
+        path: challengePath(rowNumber, "try_created_at"),
+        message: "is required for a payment-attempt row",
+      },
+    ]);
+  }
+  if (amount === undefined || sessionCreatedAt === undefined) {
+    throw new DomainValidationError("Invalid challenge dataset row", [
+      {
+        path: `challengeData.rows[${rowNumber}]`,
+        message: "is missing required mapped values",
+      },
+    ]);
+  }
+
+  const status: PaymentAttemptStatus =
+    sourceAttemptStatus === "Verified" || sourceAttemptStatus === "Paid"
+      ? "succeeded"
+      : sourceAttemptStatus === "Failed" || sourceAttemptStatus === "Reversed"
+        ? "failed"
+        : "pending";
+  return {
+    attempt: {
+      attemptId: `challenge:${sessionKey}:try:${attemptSequence}`,
+      sessionId: sessionKey,
+      merchantId,
+      occurredAt: attemptCreatedAt,
+      amount,
+      currency: "IRR",
+      status,
+      adjustedFee: adjustedFee ?? null,
+      attemptSequence,
+      sourceSessionStatus,
+      sourceAttemptStatus,
+      sessionCreatedAt,
+      ...(terminalId !== undefined ? { terminalId } : {}),
+      ...(issuer !== undefined ? { issuer } : {}),
+      ...(categoryId !== undefined && categoryLabel !== undefined
+        ? { merchantCategory: { id: categoryId, label: categoryLabel } }
+        : {}),
+      ...(switchResponseCode !== undefined ? { switchResponseCode } : {}),
+      ...(pspCode !== undefined ? { pspCode } : {}),
+      ...(payerCardKey !== undefined ? { payerCardKey } : {}),
+      ...(verifyType !== undefined ? { verifyType } : {}),
+      ...(initTimeMs !== undefined ? { initTimeMs } : {}),
+      ...(verifyTimeMs !== undefined ? { verifyTimeMs } : {}),
+      ...(verifiedAt !== undefined ? { verifiedAt } : {}),
+      ...(settledAt !== undefined ? { settledAt } : {}),
+      ...(expiresAt !== undefined ? { expiresAt } : {}),
+    },
+    session: null,
+    exclusionReason: null,
+    missingAdjustedFee: adjustedFee === undefined,
+    missingIssuer: issuer === undefined,
+  };
+};
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -603,6 +1070,7 @@ export const parsePaymentAttemptsJson = (json: string): PaymentAttempt[] => {
 
 export const buildPaymentSessions = (
   attempts: readonly PaymentAttempt[],
+  preservedSessions: readonly PaymentSession[] = [],
 ): PaymentSession[] => {
   const grouped = new Map<string, PaymentAttempt[]>();
   const seenAttemptIds = new Set<string>();
@@ -723,6 +1191,7 @@ export const buildPaymentSessions = (
     sessions.push({
       sessionId,
       merchantId: first.merchantId,
+      observedAt: first.occurredAt,
       firstAttemptAt: first.occurredAt,
       lastAttemptAt: last.occurredAt,
       representativeAmount: (successfulAttempt ?? first).amount,
@@ -732,9 +1201,50 @@ export const buildPaymentSessions = (
     });
   }
 
+  const sessionIds = new Set(sessions.map((session) => session.sessionId));
+  for (const session of preservedSessions) {
+    if (
+      session.sessionId.trim().length === 0 ||
+      session.merchantId.trim().length === 0 ||
+      session.attempts.length !== 0 ||
+      session.sourceAttemptStatus !== "NoAttempt" ||
+      session.sourceSessionStatus !== "Failed" ||
+      session.outcome !== "failed" ||
+      session.currency !== "IRR" ||
+      !Number.isSafeInteger(session.representativeAmount) ||
+      session.representativeAmount < 0 ||
+      session.firstAttemptAt !== undefined ||
+      session.lastAttemptAt !== undefined ||
+      parseRfc3339Timestamp(session.observedAt) === null
+    ) {
+      throw new DomainValidationError("Invalid preserved payment session", [
+        {
+          path: `session.${session.sessionId}`,
+          message:
+            "a preserved NoAttempt session must use its real identifiers, IRR amount and source creation time, be failed, and contain no attempts or attempt timestamps",
+        },
+      ]);
+    }
+    if (sessionIds.has(session.sessionId)) {
+      throw new DomainValidationError("Duplicate payment session", [
+        {
+          path: `session.${session.sessionId}`,
+          message: "duplicates a payment session identifier",
+        },
+      ]);
+    }
+    sessionIds.add(session.sessionId);
+    sessions.push({
+      ...session,
+      attempts: [],
+      ...(session.merchantCategory !== undefined
+        ? { merchantCategory: { ...session.merchantCategory } }
+        : {}),
+    });
+  }
+
   return sessions.sort((left, right) => {
-    const timeDelta =
-      Date.parse(left.firstAttemptAt) - Date.parse(right.firstAttemptAt);
+    const timeDelta = Date.parse(left.observedAt) - Date.parse(right.observedAt);
     return timeDelta !== 0
       ? timeDelta
       : left.sessionId.localeCompare(right.sessionId);

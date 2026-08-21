@@ -45,11 +45,11 @@ const DESCRIPTIVE_LIMITATION =
   "This analysis is descriptive and observational. It identifies associations in the selected records and does not establish causation.";
 
 const SESSION_LIMITATION =
-  "Payment sessions are grouped by sessionId; repeated payment attempts are retained as attempts and are not counted as additional sessions.";
+  "Payment sessions are grouped by sessionId; repeated payment attempts remain attempts, while source NoAttempt rows, when present, remain zero-attempt sessions.";
 
 const filterSemanticsLimitation = (filters: FilterState): string =>
   (filters.analysisUnit ?? "payment_session") === "payment_session"
-    ? "Payment-session filters preserve every attempt in a selected session. Date scope uses the session's first observed attempt; status uses its derived outcome; terminal and issuer match when any attempt in the session matches."
+    ? "Payment-session filters preserve every attempt in a selected session. Date scope uses the session observation time (the first observed attempt, or source creation time for a NoAttempt session); status uses its derived outcome; terminal and issuer match source session fields or any attempt in the session."
     : "Payment-attempt filters apply to individual attempts. Attempt-count boundaries still use the full session's attempt count.";
 
 const CONFOUNDING_LIMITATION =
@@ -318,22 +318,93 @@ const matchesSessionCategoricalDimension = (
           ? []
           : [attempt.merchantCategory.id],
       );
+      if (session.merchantCategory !== undefined) {
+        candidates.push(session.merchantCategory.id);
+      }
       break;
     case "terminal":
       candidates = session.attempts.flatMap((attempt) =>
         attempt.terminalId === undefined ? [] : [attempt.terminalId],
       );
+      if (session.terminalId !== undefined) {
+        candidates.push(session.terminalId);
+      }
       break;
     case "issuer":
       candidates = session.attempts.flatMap((attempt) =>
         attempt.issuer === undefined ? [] : [attempt.issuer],
       );
+      if (session.issuer !== undefined) {
+        candidates.push(session.issuer);
+      }
       break;
     default:
       return true;
   }
   const matches = candidates.some((candidate) => values.has(candidate));
   return dimension.operator === "include" ? matches : !matches;
+};
+
+const filterPaymentSessions = (
+  sessions: readonly PaymentSession[],
+  filters: FilterState,
+): PaymentSession[] => {
+  validateFilters(filters);
+  const merchantIds =
+    filters.merchantIds === undefined
+      ? undefined
+      : new Set(filters.merchantIds.map((merchantId) => merchantId.trim()));
+  const from =
+    filters.dateRange === undefined
+      ? undefined
+      : Date.parse(filters.dateRange.from);
+  const to =
+    filters.dateRange === undefined
+      ? undefined
+      : Date.parse(filters.dateRange.to);
+  const categoricalDimensions = (filters.dimensions ?? []).filter(
+    (dimension) =>
+      dimension.key === "status" ||
+      dimension.key === "category" ||
+      dimension.key === "terminal" ||
+      dimension.key === "issuer",
+  );
+  const amountMinimums = (filters.dimensions ?? [])
+    .filter((dimension) => dimension.key === "amount_min")
+    .map((dimension) => readNumericDimension(dimension, false));
+  const amountMaximums = (filters.dimensions ?? [])
+    .filter((dimension) => dimension.key === "amount_max")
+    .map((dimension) => readNumericDimension(dimension, false));
+  const attemptCountMinimums = (filters.dimensions ?? [])
+    .filter((dimension) => dimension.key === "attempt_count_min")
+    .map((dimension) => readNumericDimension(dimension, true));
+  const attemptCountMaximums = (filters.dimensions ?? [])
+    .filter((dimension) => dimension.key === "attempt_count_max")
+    .map((dimension) => readNumericDimension(dimension, true));
+
+  return sessions.filter((session) => {
+    const observedAt = Date.parse(session.observedAt);
+    return (
+      (merchantIds === undefined || merchantIds.has(session.merchantId)) &&
+      (from === undefined || observedAt >= from) &&
+      (to === undefined || observedAt <= to) &&
+      categoricalDimensions.every((dimension) =>
+        matchesSessionCategoricalDimension(session, dimension),
+      ) &&
+      amountMinimums.every(
+        (minimum) => session.representativeAmount >= minimum,
+      ) &&
+      amountMaximums.every(
+        (maximum) => session.representativeAmount <= maximum,
+      ) &&
+      attemptCountMinimums.every(
+        (minimum) => session.attempts.length >= minimum,
+      ) &&
+      attemptCountMaximums.every(
+        (maximum) => session.attempts.length <= maximum,
+      )
+    );
+  });
 };
 
 export const applyPaymentAttemptFilters = (
@@ -378,31 +449,7 @@ export const applyPaymentAttemptFilters = (
   const fullSessions = buildPaymentSessions(validatedAttempts);
   if ((filters.analysisUnit ?? "payment_session") === "payment_session") {
     const selectedSessionIds = new Set(
-      fullSessions
-        .filter((session) => {
-          const firstAttemptAt = Date.parse(session.firstAttemptAt);
-          return (
-            (merchantIds === undefined ||
-              merchantIds.has(session.merchantId)) &&
-            (from === undefined || firstAttemptAt >= from) &&
-            (to === undefined || firstAttemptAt <= to) &&
-            categoricalDimensions.every((dimension) =>
-              matchesSessionCategoricalDimension(session, dimension),
-            ) &&
-            amountMinimums.every(
-              (minimum) => session.representativeAmount >= minimum,
-            ) &&
-            amountMaximums.every(
-              (maximum) => session.representativeAmount <= maximum,
-            ) &&
-            attemptCountMinimums.every(
-              (minimum) => session.attempts.length >= minimum,
-            ) &&
-            attemptCountMaximums.every(
-              (maximum) => session.attempts.length <= maximum,
-            )
-          );
-        })
+      filterPaymentSessions(fullSessions, filters)
         .map((session) => session.sessionId),
     );
     return validatedAttempts.filter((attempt) =>
@@ -445,15 +492,33 @@ const scopeMerchant = (
   return filtered.filter((attempt) => attempt.merchantId === merchantId);
 };
 
+const scopeMerchantSessions = (
+  attempts: readonly PaymentAttempt[],
+  merchantId: string,
+  filters: FilterState,
+  sourceSessions?: readonly PaymentSession[],
+): PaymentSession[] => {
+  if (merchantId.trim().length === 0) {
+    throw new DomainValidationError("Invalid merchant scope", [
+      { path: "merchantId", message: "must be a non-empty string" },
+    ]);
+  }
+  return filterPaymentSessions(
+    sourceSessions ?? buildPaymentSessions(attempts),
+    filters,
+  ).filter((session) => session.merchantId === merchantId);
+};
+
 const resolvePeriod = (
   attempts: readonly PaymentAttempt[],
   filters: FilterState,
   provenance: AnalysisProvenance,
+  sessions: readonly PaymentSession[] = [],
 ): DateRange => {
   if (filters.dateRange !== undefined) {
     return { ...filters.dateRange };
   }
-  if (attempts.length === 0) {
+  if (attempts.length === 0 && sessions.length === 0) {
     throw new DomainValidationError("No records in analytical scope", [
       {
         path: "paymentAttempts",
@@ -465,6 +530,11 @@ const resolvePeriod = (
   let latest = Number.NEGATIVE_INFINITY;
   for (const attempt of attempts) {
     const timestamp = Date.parse(attempt.occurredAt);
+    earliest = Math.min(earliest, timestamp);
+    latest = Math.max(latest, timestamp);
+  }
+  for (const session of sessions) {
+    const timestamp = Date.parse(session.observedAt);
     earliest = Math.min(earliest, timestamp);
     latest = Math.max(latest, timestamp);
   }
@@ -580,6 +650,7 @@ const summaryLimitations = (
 const merchantIdentity = (
   attempts: readonly PaymentAttempt[],
   merchantId: string,
+  sessions: readonly PaymentSession[] = [],
 ): {
   displayName: string;
   category?: MerchantCategory;
@@ -596,6 +667,11 @@ const merchantIdentity = (
   for (const attempt of attempts) {
     if (attempt.merchantCategory !== undefined) {
       categoryMap.set(attempt.merchantCategory.id, attempt.merchantCategory);
+    }
+  }
+  for (const session of sessions) {
+    if (session.merchantCategory !== undefined) {
+      categoryMap.set(session.merchantCategory.id, session.merchantCategory);
     }
   }
   const categories = [...categoryMap.values()];
@@ -635,10 +711,16 @@ export const buildMerchantSummary = (
   merchantId: string,
   filters: FilterState,
   provenance: AnalysisProvenance,
+  sourceSessions?: readonly PaymentSession[],
 ): MerchantSummary => {
   const scoped = scopeMerchant(attempts, merchantId, filters);
-  const period = resolvePeriod(scoped, filters, provenance);
-  const sessions = buildPaymentSessions(scoped);
+  const sessions = scopeMerchantSessions(
+    attempts,
+    merchantId,
+    filters,
+    sourceSessions,
+  );
+  const period = resolvePeriod(scoped, filters, provenance, sessions);
   const succeededSessionCount = sessions.filter(
     (session) => session.outcome === "succeeded",
   ).length;
@@ -658,7 +740,7 @@ export const buildMerchantSummary = (
     ...summaryLimitations(scoped, sessions),
     filterSemanticsLimitation(filters),
   ];
-  const identity = merchantIdentity(scoped, merchantId);
+  const identity = merchantIdentity(scoped, merchantId, sessions);
 
   const headlineMetrics: Metric[] = [
     metric(
@@ -692,7 +774,8 @@ export const buildMerchantSummary = (
       {
         metricId: "failed-session-count",
         label: "Failed payment sessions",
-        definition: "Payment sessions whose observed attempts are all failed.",
+        definition:
+          "Sessions whose observed attempts are all failed, plus source NoAttempt sessions recorded as failed.",
         value: failedSessionCount,
         unit: "count",
         analysisUnit: "payment_session",
@@ -706,7 +789,7 @@ export const buildMerchantSummary = (
         metricId: "failed-session-rate",
         label: "Failed payment-session rate",
         definition:
-          "Payment sessions whose observed attempts are all failed, divided by all payment sessions in scope.",
+          "Failed sessions, including source NoAttempt sessions, divided by all payment sessions in scope.",
         value: percentage(failedSessionCount, sessions.length),
         unit: "percent",
         analysisUnit: "payment_session",
@@ -865,10 +948,16 @@ export const buildMerchantInsights = (
   merchantId: string,
   filters: FilterState,
   provenance: AnalysisProvenance,
+  sourceSessions?: readonly PaymentSession[],
 ): Insight[] => {
   const scoped = scopeMerchant(attempts, merchantId, filters);
-  const period = resolvePeriod(scoped, filters, provenance);
-  const sessions = buildPaymentSessions(scoped);
+  const sessions = scopeMerchantSessions(
+    attempts,
+    merchantId,
+    filters,
+    sourceSessions,
+  );
+  const period = resolvePeriod(scoped, filters, provenance, sessions);
   const canonicalFilters = evidenceFilters(filters, merchantId);
   const insightLimitations = [
     DESCRIPTIVE_LIMITATION,
@@ -889,7 +978,7 @@ export const buildMerchantInsights = (
         metricId: "failed-session-rate",
         label: "Payment sessions without a successful outcome",
         definition:
-          "Payment sessions whose observed attempts are all failed, divided by all payment sessions in scope.",
+          "Failed sessions, including source NoAttempt sessions, divided by all payment sessions in scope.",
         value: failureRate,
         unit: "percent",
         analysisUnit: "payment_session",
@@ -904,8 +993,8 @@ export const buildMerchantInsights = (
       canonicalFilters,
       period,
       "Failed-session rate",
-      "Count sessions with only failed attempts, divide by all distinct sessions in scope, then multiply by 100.",
-      "Required attempt, session, merchant, timestamp, amount, currency, and status fields are runtime-validated. Pending sessions remain in the denominator and are not counted as failed.",
+      "Count failed sessions, including source NoAttempt sessions, divide by all distinct sessions in scope, then multiply by 100.",
+      "Required attempt and preserved-session fields are runtime-validated. NoAttempt rows remain zero-attempt sessions. Pending sessions remain in the denominator and are not counted as failed.",
       insightLimitations,
       provenance,
     );
@@ -913,7 +1002,7 @@ export const buildMerchantInsights = (
       insightId: `insight:${sanitizeIdPart(merchantId)}:failed-sessions`,
       merchantId,
       title: "Some payment sessions ended without a recorded success",
-      observation: `${failedSessions.length} of ${sessions.length} payment sessions (${displayPercentage(failureRate)}) contained only failed attempts in the selected scope.`,
+      observation: `${failedSessions.length} of ${sessions.length} payment sessions (${displayPercentage(failureRate)}) ended failed without a recorded success in the selected scope.`,
       businessImpact:
         "These observed checkout journeys did not record a successful outcome, so reviewing their operational failure context may reveal avoidable friction.",
       evidence: [evidence],
@@ -1032,12 +1121,21 @@ export const buildDailyTrends = (
   merchantId: string,
   filters: FilterState,
   provenance: AnalysisProvenance,
+  sourceSessions?: readonly PaymentSession[],
 ): ChartSeries[] => {
   const scoped = scopeMerchant(attempts, merchantId, filters);
-  const period = resolvePeriod(scoped, filters, provenance);
+  const sessions =
+    filters.analysisUnit === "payment_attempt"
+      ? []
+      : scopeMerchantSessions(
+          attempts,
+          merchantId,
+          filters,
+          sourceSessions,
+        );
+  const period = resolvePeriod(scoped, filters, provenance, sessions);
   const timezone = period.timezone;
   validateTimezone(timezone);
-  const sessions = buildPaymentSessions(scoped);
   const attemptCounts = new Map<string, number>();
   for (const attempt of scoped) {
     const day = dayInTimezone(attempt.occurredAt, timezone);
@@ -1045,7 +1143,7 @@ export const buildDailyTrends = (
   }
   const sessionsByDay = new Map<string, PaymentSession[]>();
   for (const session of sessions) {
-    const day = dayInTimezone(session.firstAttemptAt, timezone);
+    const day = dayInTimezone(session.observedAt, timezone);
     const current = sessionsByDay.get(day);
     if (current === undefined) {
       sessionsByDay.set(day, [session]);
@@ -1091,7 +1189,7 @@ export const buildDailyTrends = (
       limitations: [
         SESSION_LIMITATION,
         ...commonLimitations,
-        "Each payment session is assigned to the calendar day of its first observed attempt.",
+        "Each payment session is assigned to its observation day: the first attempt day, or source creation day for a NoAttempt session.",
       ],
     },
     {
@@ -1114,7 +1212,7 @@ export const buildDailyTrends = (
       limitations: [
         SESSION_LIMITATION,
         ...commonLimitations,
-        "Each payment session is assigned to the calendar day of its first observed attempt.",
+        "Each payment session is assigned to its observation day: the first attempt day, or source creation day for a NoAttempt session.",
       ],
     },
   ];
@@ -1190,32 +1288,40 @@ export const buildMerchantSegments = (
   attempts: readonly PaymentAttempt[],
   filters: FilterState,
   provenance: AnalysisProvenance,
+  sourceSessions?: readonly PaymentSession[],
 ): Segment[] => {
   const scoped = applyPaymentAttemptFilters(attempts, filters);
-  if (scoped.length === 0) {
+  const sessions =
+    filters.analysisUnit === "payment_attempt"
+      ? buildPaymentSessions(scoped)
+      : filterPaymentSessions(
+          sourceSessions ?? buildPaymentSessions(attempts),
+          filters,
+        );
+  if (sessions.length === 0) {
     return [];
   }
-  const period = resolvePeriod(scoped, filters, provenance);
-  const attemptsByMerchant = new Map<string, PaymentAttempt[]>();
-  for (const attempt of scoped) {
-    const current = attemptsByMerchant.get(attempt.merchantId);
+  const period = resolvePeriod(scoped, filters, provenance, sessions);
+  const sessionsByMerchant = new Map<string, PaymentSession[]>();
+  for (const session of sessions) {
+    const current = sessionsByMerchant.get(session.merchantId);
     if (current === undefined) {
-      attemptsByMerchant.set(attempt.merchantId, [attempt]);
+      sessionsByMerchant.set(session.merchantId, [session]);
     } else {
-      current.push(attempt);
+      current.push(session);
     }
   }
   const observations: MerchantSegmentObservation[] = [];
-  for (const [merchantId, merchantAttempts] of attemptsByMerchant) {
-    const sessions = buildPaymentSessions(merchantAttempts);
-    const successfulSessionCount = sessions.filter(
+  for (const [merchantId, merchantSessions] of sessionsByMerchant) {
+    const successfulSessionCount = merchantSessions.filter(
       (session) => session.outcome === "succeeded",
     ).length;
     observations.push({
       merchantId,
-      sessionCount: sessions.length,
+      sessionCount: merchantSessions.length,
       successfulSessionCount,
-      successRate: percentage(successfulSessionCount, sessions.length) ?? 0,
+      successRate:
+        percentage(successfulSessionCount, merchantSessions.length) ?? 0,
     });
   }
   const frequencyMedian = median(

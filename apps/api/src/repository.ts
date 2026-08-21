@@ -1,19 +1,38 @@
 import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
+import { createGunzip } from "node:zlib";
 
 import {
   buildPaymentSessions,
   DomainValidationError,
+  mapChallengeCsvRow,
+  normalizeChallengeDataUtcOffset,
   parsePaymentAttemptsJson,
   parseRfc3339Timestamp,
+  validateChallengeCsvHeader,
   type PaymentAttempt,
   type PaymentAttemptStatus,
+  type PaymentSession,
 } from "./domain.js";
 
 export interface RepositorySnapshot {
   readonly attempts: readonly PaymentAttempt[];
+  readonly sessions?: readonly PaymentSession[];
   readonly datasetId: string;
   readonly loadedAt: string;
+  readonly ingestion?: RepositoryIngestionMetadata;
+}
+
+export interface RepositoryIngestionMetadata {
+  readonly sourceFormat: "memory_json" | "json" | "challenge_csv_gzip";
+  readonly sourceRowCount: number;
+  readonly acceptedAttemptCount: number;
+  readonly excludedNoAttemptCount: number;
+  readonly preservedNoAttemptSessionCount: number;
+  readonly missingAdjustedFeeCount: number;
+  readonly missingIssuerCount: number;
+  readonly sourceUtcOffset?: string;
 }
 
 export interface PaymentAttemptQuery {
@@ -62,22 +81,34 @@ const cloneAttempt = (attempt: PaymentAttempt): PaymentAttempt => ({
 
 const freezeSnapshot = (
   attempts: readonly PaymentAttempt[],
+  sessions: readonly PaymentSession[],
   datasetId: string,
   loadedAt: string,
-): RepositorySnapshot =>
-  Object.freeze({
-    attempts: Object.freeze(
-      attempts.map((attempt) => {
-        const cloned = cloneAttempt(attempt);
-        if (cloned.merchantCategory !== undefined) {
-          Object.freeze(cloned.merchantCategory);
-        }
-        return Object.freeze(cloned);
-      }),
-    ),
+  ingestion: RepositoryIngestionMetadata,
+): RepositorySnapshot => {
+  for (const attempt of attempts) {
+    if (attempt.merchantCategory !== undefined) {
+      Object.freeze(attempt.merchantCategory);
+    }
+    Object.freeze(attempt);
+  }
+  Object.freeze(attempts);
+  for (const session of sessions) {
+    Object.freeze(session.attempts);
+    if (session.merchantCategory !== undefined) {
+      Object.freeze(session.merchantCategory);
+    }
+    Object.freeze(session);
+  }
+  Object.freeze(sessions);
+  return Object.freeze({
+    attempts,
+    sessions,
     datasetId,
     loadedAt,
+    ingestion: Object.freeze({ ...ingestion }),
   });
+};
 
 const validateCurrencyAmountRanges = (
   attempts: readonly PaymentAttempt[],
@@ -96,6 +127,23 @@ const validateCurrencyAmountRanges = (
     totals.set(attempt.currency, next);
   }
 };
+
+const ingestionMetadataForAttempts = (
+  attempts: readonly PaymentAttempt[],
+  sourceFormat: "memory_json" | "json",
+): RepositoryIngestionMetadata => ({
+  sourceFormat,
+  sourceRowCount: attempts.length,
+  acceptedAttemptCount: attempts.length,
+  excludedNoAttemptCount: 0,
+  preservedNoAttemptSessionCount: 0,
+  missingAdjustedFeeCount: attempts.filter(
+    (attempt) =>
+      attempt.adjustedFee === undefined || attempt.adjustedFee === null,
+  ).length,
+  missingIssuerCount: attempts.filter((attempt) => attempt.issuer === undefined)
+    .length,
+});
 
 const validateQueryDate = (value: string | undefined, field: string): void => {
   if (value !== undefined && parseRfc3339Timestamp(value) === null) {
@@ -158,7 +206,7 @@ export class InMemoryPaymentAttemptRepository implements PaymentAttemptRepositor
     options: InMemoryPaymentAttemptRepositoryOptions = {},
   ) {
     const validated = parsePaymentAttempts(attempts);
-    buildPaymentSessions(validated);
+    const sessions = buildPaymentSessions(validated);
     validateCurrencyAmountRanges(validated);
     const loadedAt = options.loadedAt ?? new Date().toISOString();
     if (parseRfc3339Timestamp(loadedAt) === null) {
@@ -175,8 +223,10 @@ export class InMemoryPaymentAttemptRepository implements PaymentAttemptRepositor
       .digest("hex");
     this.#snapshot = freezeSnapshot(
       validated,
+      sessions,
       options.datasetId ?? `memory-sha256:${digest}`,
       loadedAt,
+      ingestionMetadataForAttempts(validated, "memory_json"),
     );
   }
 
@@ -189,13 +239,174 @@ export class InMemoryPaymentAttemptRepository implements PaymentAttemptRepositor
   }
 }
 
+const invalidCsv = (message: string): DomainValidationError =>
+  new DomainValidationError("Invalid challenge CSV document", [
+    { path: "challengeData.csv", message },
+  ]);
+
+const parseCsvRecords = async function* (
+  chunks: AsyncIterable<unknown>,
+): AsyncGenerator<string[]> {
+  let field = "";
+  let record: string[] = [];
+  let inQuotes = false;
+  let quoteClosed = false;
+  let skipLineFeed = false;
+
+  for await (const rawChunk of chunks) {
+    const chunk =
+      typeof rawChunk === "string"
+        ? rawChunk
+        : Buffer.isBuffer(rawChunk)
+          ? rawChunk.toString("utf8")
+          : String(rawChunk);
+    for (const character of chunk) {
+      if (skipLineFeed) {
+        skipLineFeed = false;
+        if (character === "\n") {
+          continue;
+        }
+      }
+      if (inQuotes) {
+        if (character === '"') {
+          inQuotes = false;
+          quoteClosed = true;
+        } else {
+          field += character;
+        }
+        continue;
+      }
+      if (quoteClosed) {
+        if (character === '"') {
+          field += '"';
+          inQuotes = true;
+          quoteClosed = false;
+          continue;
+        }
+        if (character !== "," && character !== "\n" && character !== "\r") {
+          throw invalidCsv("contains characters after a closing quote");
+        }
+        quoteClosed = false;
+      } else if (character === '"') {
+        if (field.length > 0) {
+          throw invalidCsv("contains a quote inside an unquoted field");
+        }
+        inQuotes = true;
+        continue;
+      }
+
+      if (character === ",") {
+        record.push(field);
+        field = "";
+      } else if (character === "\n" || character === "\r") {
+        record.push(field);
+        yield record;
+        field = "";
+        record = [];
+        skipLineFeed = character === "\r";
+      } else {
+        field += character;
+      }
+    }
+  }
+
+  if (inQuotes) {
+    throw invalidCsv("ends inside a quoted field");
+  }
+  if (field.length > 0 || record.length > 0 || quoteClosed) {
+    record.push(field);
+    yield record;
+  }
+};
+
+interface ChallengeCsvLoadResult {
+  readonly attempts: PaymentAttempt[];
+  readonly preservedSessions: PaymentSession[];
+  readonly digest: string;
+  readonly ingestion: RepositoryIngestionMetadata;
+}
+
+const loadChallengeCsvGzip = async (
+  filePath: string,
+  sourceUtcOffset: string,
+): Promise<ChallengeCsvLoadResult> => {
+  const digest = createHash("sha256");
+  const source = createReadStream(filePath);
+  const decompressed = createGunzip();
+  source.on("data", (chunk: string | Buffer) => {
+    digest.update(chunk);
+  });
+  source.on("error", (error) => decompressed.destroy(error));
+  source.pipe(decompressed);
+  decompressed.setEncoding("utf8");
+
+  const attempts: PaymentAttempt[] = [];
+  const preservedSessions: PaymentSession[] = [];
+  let headerSeen = false;
+  let sourceRowCount = 0;
+  let excludedNoAttemptCount = 0;
+  let missingAdjustedFeeCount = 0;
+  let missingIssuerCount = 0;
+  for await (const fields of parseCsvRecords(
+    decompressed as AsyncIterable<unknown>,
+  )) {
+    if (!headerSeen) {
+      validateChallengeCsvHeader(fields);
+      headerSeen = true;
+      continue;
+    }
+    sourceRowCount += 1;
+    const mapped = mapChallengeCsvRow(
+      fields,
+      sourceRowCount + 1,
+      sourceUtcOffset,
+    );
+    if (mapped.attempt === null) {
+      excludedNoAttemptCount += 1;
+      if (mapped.session === null) {
+        throw invalidCsv("lost a NoAttempt session during row mapping");
+      }
+      preservedSessions.push(mapped.session);
+      continue;
+    }
+    attempts.push(mapped.attempt);
+    if (mapped.missingAdjustedFee) {
+      missingAdjustedFeeCount += 1;
+    }
+    if (mapped.missingIssuer) {
+      missingIssuerCount += 1;
+    }
+  }
+  if (!headerSeen) {
+    throw invalidCsv("does not contain a header row");
+  }
+
+  return {
+    attempts,
+    preservedSessions,
+    digest: digest.digest("hex"),
+    ingestion: {
+      sourceFormat: "challenge_csv_gzip",
+      sourceRowCount,
+      acceptedAttemptCount: attempts.length,
+      excludedNoAttemptCount,
+      preservedNoAttemptSessionCount: preservedSessions.length,
+      missingAdjustedFeeCount,
+      missingIssuerCount,
+      sourceUtcOffset,
+    },
+  };
+};
+
 export interface FilePaymentAttemptRepositoryOptions {
   datasetId?: string;
+  challengeDataUtcOffset?: string;
 }
 
 export class FilePaymentAttemptRepository implements PaymentAttemptRepository {
   readonly #filePath: string;
   readonly #datasetId: string | undefined;
+  readonly #challengeDataUtcOffset: string;
   #cache:
     | {
         key: string;
@@ -212,6 +423,9 @@ export class FilePaymentAttemptRepository implements PaymentAttemptRepository {
     }
     this.#filePath = filePath;
     this.#datasetId = options.datasetId;
+    this.#challengeDataUtcOffset = normalizeChallengeDataUtcOffset(
+      options.challengeDataUtcOffset ?? "+03:30",
+    );
   }
 
   async getSnapshot(): Promise<RepositorySnapshot> {
@@ -228,15 +442,33 @@ export class FilePaymentAttemptRepository implements PaymentAttemptRepository {
         return this.#cache.snapshot;
       }
 
-      const json = await readFile(this.#filePath, "utf8");
-      const attempts = parsePaymentAttemptsJson(json);
-      buildPaymentSessions(attempts);
+      let attempts: PaymentAttempt[];
+      let preservedSessions: PaymentSession[] = [];
+      let digest: string;
+      let ingestion: RepositoryIngestionMetadata;
+      if (this.#filePath.toLowerCase().endsWith(".csv.gz")) {
+        const loaded = await loadChallengeCsvGzip(
+          this.#filePath,
+          this.#challengeDataUtcOffset,
+        );
+        attempts = loaded.attempts;
+        preservedSessions = loaded.preservedSessions;
+        digest = loaded.digest;
+        ingestion = loaded.ingestion;
+      } else {
+        const json = await readFile(this.#filePath, "utf8");
+        attempts = parsePaymentAttemptsJson(json);
+        digest = createHash("sha256").update(json).digest("hex");
+        ingestion = ingestionMetadataForAttempts(attempts, "json");
+      }
+      const sessions = buildPaymentSessions(attempts, preservedSessions);
       validateCurrencyAmountRanges(attempts);
-      const digest = createHash("sha256").update(json).digest("hex");
       const snapshot = freezeSnapshot(
         attempts,
+        sessions,
         this.#datasetId ?? `sha256:${digest}`,
         new Date(Number(fileStats.mtimeNs / 1_000_000n)).toISOString(),
+        ingestion,
       );
       this.#cache = { key: cacheKey, snapshot };
       return snapshot;

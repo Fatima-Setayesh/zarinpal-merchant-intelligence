@@ -45,7 +45,11 @@ export const createConfiguredRepository = (
 ): PaymentAttemptRepository =>
   config.paymentsDataPath === undefined
     ? new UnavailablePaymentAttemptRepository()
-    : new FilePaymentAttemptRepository(config.paymentsDataPath);
+    : new FilePaymentAttemptRepository(config.paymentsDataPath, {
+        ...(config.paymentsDataUtcOffset !== undefined
+          ? { challengeDataUtcOffset: config.paymentsDataUtcOffset }
+          : {}),
+      });
 
 export const startServer = async (
   config: ApiConfig = loadConfig(),

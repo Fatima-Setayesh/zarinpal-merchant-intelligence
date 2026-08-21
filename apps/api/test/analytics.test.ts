@@ -19,6 +19,7 @@ import {
   type AnalysisProvenance,
   type Metric,
   type PaymentAttempt,
+  type PaymentSession,
 } from "../src/domain.js";
 import {
   FilePaymentAttemptRepository,
@@ -270,6 +271,84 @@ describe("merchant analytics", () => {
       ),
     ).toBe(true);
     expect(summary.limitations.join(" ")).toContain("first observed attempt");
+  });
+
+  it("retains a failed NoAttempt session without increasing attempt counts", () => {
+    const ordinarySummary = buildMerchantSummary(
+      attempts,
+      "m1",
+      {},
+      provenance,
+    );
+    const noAttemptSession: PaymentSession = {
+      sessionId: "s-no-attempt",
+      merchantId: "m1",
+      observedAt: "2026-01-03T08:00:00.000Z",
+      representativeAmount: 400,
+      currency: "IRR",
+      outcome: "failed",
+      attempts: [],
+      terminalId: "t3",
+      merchantCategory: { id: "retail", label: "Retail" },
+      sourceSessionStatus: "Failed",
+      sourceAttemptStatus: "NoAttempt",
+    };
+    const sourceSessions = buildPaymentSessions(attempts, [noAttemptSession]);
+    const summary = buildMerchantSummary(
+      attempts,
+      "m1",
+      {},
+      provenance,
+      sourceSessions,
+    );
+    const zeroAttemptSummary = buildMerchantSummary(
+      attempts,
+      "m1",
+      {
+        dimensions: [
+          {
+            key: "attempt_count_max",
+            operator: "include",
+            values: ["0"],
+          },
+        ],
+      },
+      provenance,
+      sourceSessions,
+    );
+
+    expect(sourceSessions.flatMap((session) => session.attempts)).toHaveLength(
+      attempts.length,
+    );
+    expect(noAttemptSession.attempts).toHaveLength(0);
+    expect(
+      metricById(ordinarySummary.headlineMetrics, "payment-session-count")
+        .value,
+    ).toBe(3);
+    expect(
+      metricById(summary.headlineMetrics, "payment-session-count").value,
+    ).toBe(4);
+    expect(
+      metricById(summary.headlineMetrics, "failed-session-count").value,
+    ).toBe(2);
+    expect(
+      metricById(summary.headlineMetrics, "failed-session-rate").value,
+    ).toBe(50);
+    expect(
+      metricById(summary.headlineMetrics, "successful-session-rate").value,
+    ).toBe(50);
+    expect(
+      metricById(
+        zeroAttemptSummary.headlineMetrics,
+        "payment-session-count",
+      ).value,
+    ).toBe(1);
+    expect(
+      metricById(
+        zeroAttemptSummary.headlineMetrics,
+        "failed-session-rate",
+      ).value,
+    ).toBe(100);
   });
 
   it("emits source amounts separately for each currency", () => {

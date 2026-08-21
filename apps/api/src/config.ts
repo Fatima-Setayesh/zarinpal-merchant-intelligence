@@ -2,6 +2,7 @@ export interface ApiConfig {
   readonly host: string;
   readonly port: number;
   readonly paymentsDataPath: string | undefined;
+  readonly paymentsDataUtcOffset?: string;
   readonly corsOrigin: string;
   readonly authToken: string | undefined;
 }
@@ -10,6 +11,7 @@ type ConfigVariable =
   | "API_HOST"
   | "API_PORT"
   | "PAYMENTS_DATA_PATH"
+  | "PAYMENTS_DATA_UTC_OFFSET"
   | "CORS_ORIGIN"
   | "API_AUTH_TOKEN";
 
@@ -27,6 +29,7 @@ const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 3000;
 const DEFAULT_CORS_ORIGIN = "http://localhost:5173";
 const MINIMUM_AUTH_TOKEN_LENGTH = 32;
+const DEFAULT_PAYMENTS_DATA_UTC_OFFSET = "+03:30";
 
 function parseHost(value: string | undefined): string {
   if (value === undefined) {
@@ -82,6 +85,30 @@ function parsePaymentsDataPath(value: string | undefined): string | undefined {
   }
 
   return dataPath;
+}
+
+function parsePaymentsDataUtcOffset(value: string | undefined): string {
+  const normalized = (value ?? DEFAULT_PAYMENTS_DATA_UTC_OFFSET)
+    .trim()
+    .toUpperCase();
+  if (normalized === "Z") {
+    return normalized;
+  }
+  const match = /^([+-])(\d{2}):(\d{2})$/u.exec(normalized);
+  const hours = Number(match?.[2]);
+  const minutes = Number(match?.[3]);
+  if (
+    match === null ||
+    hours > 14 ||
+    minutes > 59 ||
+    (hours === 14 && minutes !== 0)
+  ) {
+    throw new ConfigurationError(
+      "PAYMENTS_DATA_UTC_OFFSET",
+      "must be Z or a UTC offset from -14:00 through +14:00",
+    );
+  }
+  return normalized;
 }
 
 function parseCorsOrigin(value: string | undefined): string {
@@ -174,6 +201,9 @@ export function loadConfig(
     host,
     port: parsePort(environment.API_PORT),
     paymentsDataPath: parsePaymentsDataPath(environment.PAYMENTS_DATA_PATH),
+    paymentsDataUtcOffset: parsePaymentsDataUtcOffset(
+      environment.PAYMENTS_DATA_UTC_OFFSET,
+    ),
     corsOrigin: parseCorsOrigin(environment.CORS_ORIGIN),
     authToken,
   });

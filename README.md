@@ -28,18 +28,21 @@ This is not a generic analytics dashboard. A chart only belongs in the product w
 - Vite, strict TypeScript, Tailwind CSS, shadcn/ui-compatible tokens/components, and TanStack Query foundations
 - A responsive, accessible application shell and clearly labeled `Demo / Placeholder` state
 - ESLint, Prettier, Vitest, Testing Library, type-check, and production-build scripts
-- An ownership-only `apps/api/README.md`; it contains no backend implementation
+- A strict TypeScript API with validated JSON storage, session modeling,
+  merchant metrics, insights, trends, segmentation, and traceability metadata
 
 ### Planned
 
-- Teammate-owned dataset engineering, analytical definitions, backend, and data-serving APIs
-- Merchant overview and actionable insight experiences
+- Production dataset ingestion, persistence, tenant authorization, and deployment
+- Frontend integration of merchant overview and actionable insight experiences
 - Teammate-validated evidence, metrics, filters, comparisons, and segment data
 - Traceability drawers or evidence panels backed by approved contracts
 - Purposeful visualizations, advanced filters, mobile optimization, and demo polish
 - Advanced and bonus work documented in the [product roadmap](docs/product/roadmap.md)
 
-No data pipeline, backend, database, analytical calculation, merchant metric, or generated insight is implemented in this foundation.
+No production dataset or fabricated merchant output is bundled. Without a
+configured dataset, the API reports a degraded state instead of inventing
+fallback analytics.
 
 ## Challenge priorities
 
@@ -65,6 +68,7 @@ The repository uses a deliberately small pnpm workspace. It leaves room for team
 - Tailwind CSS v4 for semantic, responsive styling
 - shadcn/ui-compatible source components and CSS-variable design tokens
 - TanStack Query for the future server-state boundary
+- A dependency-light Node.js HTTP API with strict TypeScript domain logic
 - ESLint and Prettier for static quality and formatting
 - Vitest, Testing Library, and jsdom for frontend tests
 
@@ -78,8 +82,7 @@ React Router is intentionally absent because the current shell has one meaningfu
 ├── SPEC.md
 ├── README.md
 ├── apps/
-│   ├── api/
-│   │   └── README.md
+│   ├── api/                  # Backend API, analytics, storage, and tests
 │   └── web/
 │       ├── src/
 │       │   ├── app/
@@ -114,6 +117,15 @@ pnpm install
 pnpm dev
 ```
 
+Start the API in another terminal after configuring `PAYMENTS_DATA_PATH`:
+
+```bash
+pnpm dev:api
+```
+
+See [`apps/api/README.md`](apps/api/README.md) for the input schema, endpoints,
+and environment configuration.
+
 On Windows systems that block PowerShell script shims, use `pnpm.cmd` in the same commands.
 
 The Vite development server prints its local URL after startup.
@@ -125,10 +137,10 @@ The Vite development server prints its local URL after startup.
 | `pnpm dev`          | Run the web development server.                             |
 | `pnpm format`       | Format supported repository files.                          |
 | `pnpm format:check` | Verify formatting without writing.                          |
-| `pnpm lint`         | Run frontend ESLint checks.                                 |
-| `pnpm typecheck`    | Run strict TypeScript checks.                               |
-| `pnpm test`         | Run frontend tests once.                                    |
-| `pnpm build`        | Type-check and create the production bundle.                |
+| `pnpm lint`         | Run API and frontend ESLint checks.                         |
+| `pnpm typecheck`    | Run strict API and frontend TypeScript checks.              |
+| `pnpm test`         | Run API and frontend tests once.                            |
+| `pnpm build`        | Build the API and frontend production outputs.              |
 | `pnpm check`        | Run format, lint, type-check, tests, and build in sequence. |
 
 ## Team ownership

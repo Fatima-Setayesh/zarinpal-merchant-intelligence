@@ -288,6 +288,27 @@ describe("merchant analytics", () => {
     expect(feeMetric.value).toBe(4);
     expect(feeMetric.sampleSize).toBe(2);
     expect(feeMetric.disclosure?.message).toContain("not Zarinpal's real fee");
+    const failureTrace = metricById(
+      summary.headlineMetrics,
+      "failed-session-rate",
+    ).traceability;
+    expect(failureTrace).toMatchObject({
+      analysisUnit: "payment_session",
+      sourceMetricIds: ["failed-session-count", "payment-session-count"],
+      sample: {
+        size: 3,
+        denominator: { value: 3, unit: "payment_session" },
+      },
+      provenance: {
+        datasetId: "test-dataset",
+        sourceReference: "test-fixture:validated-attempts",
+      },
+    });
+    expect(failureTrace?.formula.explanation).toContain("divided by all");
+    expect(failureTrace?.assumptions.join(" ")).toContain("NoAttempt");
+    expect(feeMetric.traceability?.missingDataHandling).toContain(
+      "excluded from both numerator and denominator",
+    );
     expect(
       summary.headlineMetrics.every(
         (item) => item.analysisUnit === summary.analysisUnit,
@@ -411,11 +432,11 @@ describe("merchant analytics", () => {
     expect(
       trends.find((series) => series.metricId === "failed-session-count")
         ?.points,
-    ).toContainEqual({ x: "2026-01-03", y: 1 });
+    ).toContainEqual({ x: "2026-01-03", y: 1, sampleSize: 1 });
     expect(
       trends.find((series) => series.metricId === "total-payment-volume-IRR")
         ?.points,
-    ).toContainEqual({ x: "2026-01-03", y: 400 });
+    ).toContainEqual({ x: "2026-01-03", y: 400, sampleSize: 1 });
     expect(failureInsight?.observation).toContain("2 of 4");
     expect(failureInsight?.businessImpact).toContain("700 IRR");
   });
@@ -586,6 +607,18 @@ describe("merchant analytics", () => {
       metricById(summary.headlineMetrics, "payment-session-count").comparison
         ?.referenceLabel,
     ).toContain("3 same-category peer merchants");
+    expect(
+      metricById(summary.headlineMetrics, "payment-session-count").comparison
+        ?.population,
+    ).toMatchObject({
+      sampleSize: 3,
+      analysisUnit: "merchant",
+      method: expect.stringContaining("Equal-merchant median"),
+    });
+    expect(
+      metricById(summary.headlineMetrics, "payment-session-count")
+        .traceability?.referencePopulation?.sampleSize,
+    ).toBe(3);
   });
 
   it("turns peer gaps into traceable ranked insights without fee overclaiming", () => {
@@ -702,6 +735,17 @@ describe("merchant analytics", () => {
     expect(retryInsight?.evidence[0]?.sourceReference).toBe(
       provenance.sourceReference,
     );
+    expect(retryInsight?.evidence[0]?.metric.traceability).toMatchObject({
+      sourceMetricIds: [
+        "observed-recovered-retry-session-count",
+        "initially-unsuccessful-retry-session-count",
+      ],
+      filters: { merchantIds: ["m1"] },
+      sample: {
+        size: 1,
+        denominator: { value: 1, unit: "payment_session" },
+      },
+    });
   });
 
   it("excludes tied initial timestamps from order-dependent retry recovery", () => {
@@ -803,33 +847,40 @@ describe("merchant analytics", () => {
       series.every((item) => item.analysisUnit === "payment_session"),
     ).toBe(true);
     expect(sessionSeries?.points).toEqual([
-      { x: "2026-01-01", y: 1 },
-      { x: "2026-01-02", y: 2 },
+      { x: "2026-01-01", y: 1, sampleSize: 1 },
+      { x: "2026-01-02", y: 2, sampleSize: 2 },
     ]);
     expect(successfulSeries?.points).toEqual([
-      { x: "2026-01-01", y: 1 },
-      { x: "2026-01-02", y: 1 },
+      { x: "2026-01-01", y: 1, sampleSize: 1 },
+      { x: "2026-01-02", y: 1, sampleSize: 2 },
     ]);
     expect(failedSeries?.points).toEqual([
-      { x: "2026-01-01", y: 0 },
-      { x: "2026-01-02", y: 1 },
+      { x: "2026-01-01", y: 0, sampleSize: 1 },
+      { x: "2026-01-02", y: 1, sampleSize: 2 },
     ]);
     expect(successRateSeries?.points).toEqual([
-      { x: "2026-01-01", y: 100 },
-      { x: "2026-01-02", y: 50 },
+      { x: "2026-01-01", y: 100, sampleSize: 1 },
+      { x: "2026-01-02", y: 50, sampleSize: 2 },
     ]);
     expect(totalVolumeSeries?.points).toEqual([
-      { x: "2026-01-01", y: 100 },
-      { x: "2026-01-02", y: 500 },
+      { x: "2026-01-01", y: 100, sampleSize: 1 },
+      { x: "2026-01-02", y: 500, sampleSize: 2 },
     ]);
     expect(successfulVolumeSeries?.points).toEqual([
-      { x: "2026-01-01", y: 100 },
-      { x: "2026-01-02", y: 200 },
+      { x: "2026-01-01", y: 100, sampleSize: 1 },
+      { x: "2026-01-02", y: 200, sampleSize: 1 },
     ]);
     expect(adjustedFeeRatioSeries?.points).toEqual([
-      { x: "2026-01-01", y: 5 },
-      { x: "2026-01-02", y: 3.5 },
+      { x: "2026-01-01", y: 5, sampleSize: 1 },
+      { x: "2026-01-02", y: 3.5, sampleSize: 1 },
     ]);
+    expect(successRateSeries?.traceability?.sample.denominator).toMatchObject({
+      unit: "payment_session",
+      description: expect.stringContaining("point's sampleSize"),
+    });
+    expect(adjustedFeeRatioSeries?.traceability?.assumptions.join(" ")).toContain(
+      "not Zarinpal's real fee",
+    );
     expect(sessionSeries?.limitations.join(" ")).toContain(
       "first observed attempt",
     );
@@ -855,22 +906,22 @@ describe("merchant analytics", () => {
     expect(
       series.find((item) => item.metricId === "payment-attempt-count")?.points,
     ).toEqual([
-      { x: "2026-01-01", y: 1 },
-      { x: "2026-01-02", y: 1 },
+      { x: "2026-01-01", y: 1, sampleSize: 1 },
+      { x: "2026-01-02", y: 1, sampleSize: 1 },
     ]);
     expect(
       series.find((item) => item.metricId === "failed-payment-attempt-count")
         ?.points,
     ).toEqual([
-      { x: "2026-01-01", y: 1 },
-      { x: "2026-01-02", y: 1 },
+      { x: "2026-01-01", y: 1, sampleSize: 1 },
+      { x: "2026-01-02", y: 1, sampleSize: 1 },
     ]);
     expect(
       series.find((item) => item.metricId === "successful-payment-attempt-rate")
         ?.points,
     ).toEqual([
-      { x: "2026-01-01", y: 0 },
-      { x: "2026-01-02", y: 0 },
+      { x: "2026-01-01", y: 0, sampleSize: 1 },
+      { x: "2026-01-02", y: 0, sampleSize: 1 },
     ]);
   });
 
@@ -1064,6 +1115,20 @@ describe("descriptive merchant segments", () => {
       );
     expect(feeMetric?.disclosure?.message).toContain(
       "not Zarinpal's real fee",
+    );
+    expect(
+      segments.every((segment) =>
+        segment.metrics.every(
+          (metric) =>
+            metric.traceability?.referencePopulation?.populationId ===
+              `segment:${segment.segmentId}` &&
+            metric.traceability?.referencePopulation?.sampleSize ===
+              segment.memberCount,
+        ),
+      ),
+    ).toBe(true);
+    expect(feeMetric?.traceability?.missingDataHandling).toContain(
+      "no value is imputed",
     );
   });
 });

@@ -550,12 +550,11 @@ const resolvePeriod = (
   };
 };
 
-const evidenceFilters = (
-  filters: FilterState,
-  merchantId: string,
-): FilterState => ({
+const traceFilters = (filters: FilterState): FilterState => ({
   ...filters,
-  merchantIds: [merchantId],
+  ...(filters.merchantIds === undefined
+    ? {}
+    : { merchantIds: [...filters.merchantIds] }),
   ...(filters.dateRange !== undefined
     ? { dateRange: { ...filters.dateRange } }
     : {}),
@@ -567,6 +566,14 @@ const evidenceFilters = (
         })),
       }
     : {}),
+});
+
+const evidenceFilters = (
+  filters: FilterState,
+  merchantId: string,
+): FilterState => ({
+  ...traceFilters(filters),
+  merchantIds: [merchantId],
 });
 
 const sourceReference = (provenance: AnalysisProvenance): string =>
@@ -582,6 +589,170 @@ const metric = (
   period,
   limitations: fields.limitations ?? [],
 });
+
+const metricSourceIds = (metricId: string): string[] => {
+  const normalized = metricId.slice(metricId.lastIndexOf(":") + 1);
+  if (
+    normalized === "successful-payment-attempt-rate" ||
+    normalized === "failed-payment-attempt-rate"
+  ) {
+    return [
+      normalized.replace("-rate", "-count"),
+      "payment-attempt-count",
+    ];
+  }
+  if (normalized.includes("payment-attempt-count")) {
+    return ["payment-attempt-records"];
+  }
+  if (normalized === "successful-session-rate") {
+    return ["successful-session-count", "payment-session-count"];
+  }
+  if (normalized === "failed-session-rate") {
+    return ["failed-session-count", "payment-session-count"];
+  }
+  if (normalized === "retry-session-rate") {
+    return ["retry-session-count", "payment-session-count"];
+  }
+  if (normalized === "observed-retry-recovery-rate") {
+    return [
+      "observed-recovered-retry-session-count",
+      "initially-unsuccessful-retry-session-count",
+    ];
+  }
+  if (normalized === "average-attempts-per-session") {
+    return ["payment-attempt-count", "payment-session-count"];
+  }
+  if (normalized.startsWith("relative-adjusted-fee-to-amount-ratio-")) {
+    return [
+      "transformed-adjusted-fee-sum",
+      normalized.replace(
+        "relative-adjusted-fee-to-amount-ratio-",
+        "successful-session-amount-",
+      ),
+    ];
+  }
+  if (normalized.startsWith("total-payment-volume-")) {
+    return ["payment-session-count", "payment-session-representative-amount"];
+  }
+  if (normalized.startsWith("successful-session-amount-")) {
+    return ["successful-session-count", "payment-session-representative-amount"];
+  }
+  if (
+    normalized.startsWith("failed-session-amount-") ||
+    normalized.startsWith("failed-session-requested-amount-")
+  ) {
+    return ["failed-session-count", "payment-session-representative-amount"];
+  }
+  if (normalized.includes("retry-session-requested-amount-")) {
+    return [
+      "initially-unsuccessful-retry-session-count",
+      "payment-session-representative-amount",
+    ];
+  }
+  if (normalized.includes("session-count")) {
+    return ["payment-session-records"];
+  }
+  return ["validated-payment-session-records"];
+};
+
+const traceDenominator = (
+  item: Metric,
+): NonNullable<
+  NonNullable<Metric["traceability"]>["sample"]["denominator"]
+> | undefined => {
+  if (item.metricId.includes("relative-adjusted-fee-to-amount-ratio-")) {
+    return {
+      unit: "corresponding_payment_amount",
+      description:
+        "Sum of corresponding successful payment amounts for records with a numeric transformed adjusted_fee value.",
+    };
+  }
+  if (item.metricId.endsWith("-rate")) {
+    return {
+      value: item.sampleSize ?? 0,
+      unit: item.analysisUnit,
+      description: `Eligible ${item.analysisUnit} records in the selected scope.`,
+    };
+  }
+  if (item.metricId.endsWith("average-attempts-per-session")) {
+    return {
+      value: item.sampleSize ?? 0,
+      unit: "payment_session",
+      description: "All payment sessions in the selected scope.",
+    };
+  }
+  return undefined;
+};
+
+const traceMetric = (
+  item: Metric,
+  filters: FilterState,
+  provenance: AnalysisProvenance,
+  overrides: {
+    formulaLabel?: string;
+    formulaExplanation?: string;
+    missingDataHandling?: string;
+    assumptions?: string[];
+    denominator?: NonNullable<
+      NonNullable<Metric["traceability"]>["sample"]["denominator"]
+    >;
+    referencePopulation?: NonNullable<
+      NonNullable<Metric["traceability"]>["referencePopulation"]
+    >;
+  } = {},
+): Metric => {
+  const isAdjustedFee = item.metricId.includes("adjusted-fee");
+  const assumptions =
+    item.analysisUnit === "payment_session"
+      ? [
+          "Sessions are grouped by source sessionId; repeated attempts are not counted as separate sessions.",
+          "Source NoAttempt rows remain zero-attempt failed sessions, and source Reversed statuses are normalized as failed while original statuses remain preserved.",
+        ]
+      : [
+          "Each validated payment-attempt record is counted once; source NoAttempt rows do not become fabricated attempts.",
+          "Source Reversed statuses are normalized as failed while original statuses remain preserved.",
+        ];
+  const denominator = overrides.denominator ?? traceDenominator(item);
+  const referencePopulation =
+    overrides.referencePopulation ?? item.comparison?.population;
+  return {
+    ...item,
+    traceability: {
+      analysisUnit: item.analysisUnit,
+      formula: {
+        label: overrides.formulaLabel ?? item.label,
+        explanation: overrides.formulaExplanation ?? item.definition,
+        ...(provenance.methodologyReference === undefined
+          ? {}
+          : { methodologyReference: provenance.methodologyReference }),
+      },
+      sourceMetricIds: metricSourceIds(item.metricId),
+      filters: traceFilters(filters),
+      dateRange: { ...item.period },
+      sample: {
+        size: item.sampleSize ?? 0,
+        analysisUnit: item.analysisUnit,
+        ...(denominator === undefined ? {} : { denominator }),
+      },
+      ...(referencePopulation === undefined ? {} : { referencePopulation }),
+      missingDataHandling:
+        overrides.missingDataHandling ??
+        (isAdjustedFee
+          ? "Records without a numeric transformed adjusted_fee or corresponding successful amount are excluded from both numerator and denominator; no value is imputed."
+          : "Required source fields are runtime-validated; malformed required values are rejected and no missing value is silently imputed."),
+      assumptions: unique([
+        ...assumptions,
+        ...(isAdjustedFee ? [ADJUSTED_FEE_DISCLOSURE.message] : []),
+        ...(overrides.assumptions ?? []),
+      ]),
+      limitations: [...item.limitations],
+      provenance: {
+        ...provenance,
+        sourceReference: sourceReference(provenance),
+      },
+    },
+  };
+};
 
 const sessionAmountInconsistencyCount = (
   sessions: readonly PaymentSession[],
@@ -918,10 +1089,20 @@ const peerComparison = (
   value: number | null,
   referenceValue: number,
   referenceLabel: string,
+  peerBenchmark: PeerBenchmark,
+  peerCount = peerBenchmark.peerCount,
 ): NonNullable<Metric["comparison"]> => ({
   referenceLabel,
   referenceValue,
   delta: value === null ? null : round(value - referenceValue),
+  population: {
+    populationId: `category:${peerBenchmark.categoryId}:peers`,
+    label: referenceLabel,
+    sampleSize: peerCount,
+    analysisUnit: "merchant",
+    method:
+      "Equal-merchant median among other eligible same-category merchants; the target merchant is excluded.",
+  },
 });
 
 interface RelativeFeeDeviation {
@@ -1059,6 +1240,7 @@ export const buildMerchantSummary = (
                 sessions.length,
                 peerBenchmark.sessionCount,
                 peerLabel,
+                peerBenchmark,
               ),
             }),
         limitations: [SESSION_LIMITATION],
@@ -1096,6 +1278,7 @@ export const buildMerchantSummary = (
                 successfulSessionRate,
                 peerBenchmark.successRate,
                 peerLabel,
+                peerBenchmark,
               ),
             }),
         limitations: [SESSION_LIMITATION, DESCRIPTIVE_LIMITATION],
@@ -1133,6 +1316,7 @@ export const buildMerchantSummary = (
                 failedSessionRate,
                 peerBenchmark.failureRate,
                 peerLabel,
+                peerBenchmark,
               ),
             }),
         limitations: [SESSION_LIMITATION, DESCRIPTIVE_LIMITATION],
@@ -1169,6 +1353,7 @@ export const buildMerchantSummary = (
                 retrySessionRate,
                 peerBenchmark.retryRate,
                 peerLabel,
+                peerBenchmark,
               ),
             }),
         limitations: [SESSION_LIMITATION, DESCRIPTIVE_LIMITATION],
@@ -1276,6 +1461,8 @@ export const buildMerchantSummary = (
                   totalVolume,
                   peerVolume.value,
                   `Median of ${peerVolume.peerCount} same-category peer merchants (${peerBenchmark.categoryId})`,
+                  peerBenchmark,
+                  peerVolume.peerCount,
                 ),
               }),
           limitations: [SESSION_LIMITATION, DESCRIPTIVE_LIMITATION],
@@ -1345,13 +1532,15 @@ export const buildMerchantSummary = (
             analysisUnit: "payment_session",
             sampleSize: adjustedFeeRatio.sampleSize,
             disclosure: ADJUSTED_FEE_DISCLOSURE,
-            ...(peerAdjustedFeeRatio === undefined
+            ...(peerAdjustedFeeRatio === undefined || peerBenchmark === undefined
               ? {}
               : {
                   comparison: peerComparison(
                     adjustedFeeRatio.value,
                     peerAdjustedFeeRatio.value,
-                    `Median of ${peerAdjustedFeeRatio.peerCount} same-category peer merchants with available adjusted_fee (${peerBenchmark?.categoryId ?? "unknown category"})`,
+                    `Median of ${peerAdjustedFeeRatio.peerCount} same-category peer merchants with available adjusted_fee (${peerBenchmark.categoryId})`,
+                    peerBenchmark,
+                    peerAdjustedFeeRatio.peerCount,
                   ),
                 }),
             limitations: [
@@ -1366,13 +1555,17 @@ export const buildMerchantSummary = (
     }
   }
 
+  const tracedHeadlineMetrics = headlineMetrics.map((item) =>
+    traceMetric(item, evidenceFilters(filters, merchantId), provenance),
+  );
+
   return {
     merchantId,
     displayName: identity.displayName,
     ...(identity.category !== undefined ? { category: identity.category } : {}),
     reportingPeriod: period,
     analysisUnit: "payment_session",
-    headlineMetrics,
+    headlineMetrics: tracedHeadlineMetrics,
     availableInsightCount: countAvailableInsights(sessions, peerBenchmark),
     limitations: unique([...limitations, ...identity.limitations]),
   };
@@ -1391,7 +1584,11 @@ const makeEvidence = (
   comparedGroups?: Evidence["comparedGroups"],
 ): Evidence => ({
   evidenceId,
-  metric: evidenceMetric,
+  metric: traceMetric(evidenceMetric, filters, provenance, {
+    formulaLabel,
+    formulaExplanation,
+    missingDataHandling,
+  }),
   filters,
   dateRange: period,
   sample: {
@@ -1564,6 +1761,7 @@ export const buildMerchantInsights = (
                 failureRate,
                 peerBenchmark.failureRate,
                 peerLabel,
+                peerBenchmark,
               ),
             }),
         limitations: insightLimitations,
@@ -1735,6 +1933,7 @@ export const buildMerchantInsights = (
                     retryRate,
                     peerBenchmark.retryRate,
                     peerLabel,
+                    peerBenchmark,
                   ),
                   limitations: retryLimitations,
                 },
@@ -1827,6 +2026,8 @@ export const buildMerchantInsights = (
             feeDeviation.value,
             feeDeviation.peerValue,
             `Median of ${feeDeviation.peerCount} same-category peer merchants with usable ${feeDeviation.currency} pairs`,
+            peerBenchmark,
+            feeDeviation.peerCount,
           ),
           disclosure: ADJUSTED_FEE_DISCLOSURE,
           limitations: feeLimitations,
@@ -1893,6 +2094,65 @@ const statusMetricPrefix = (
 ): "successful" | "failed" =>
   status === "succeeded" ? "successful" : "failed";
 
+const traceDailySeries = (
+  series: ChartSeries,
+  filters: FilterState,
+  provenance: AnalysisProvenance,
+  period: DateRange,
+  sampleSize: number,
+): ChartSeries => {
+  if (series.analysisUnit === "merchant") {
+    return series;
+  }
+  const formulaExplanation = series.metricId.includes(
+    "relative-adjusted-fee-to-amount-ratio-",
+  )
+    ? "For each calendar day, divide the sum of numeric transformed adjusted_fee values by the sum of corresponding successful payment amounts; a day with no usable pair is null."
+    : series.metricId.endsWith("-rate")
+      ? `For each calendar day, divide the qualifying ${series.analysisUnit} count by all ${series.analysisUnit} records assigned to that day, then multiply by 100.`
+      : series.metricId.includes("amount-") ||
+          series.metricId.includes("volume-")
+        ? "For each calendar day, sum the source amount once for every qualifying payment session in that currency; currencies are not converted or combined."
+        : `For each calendar day, count qualifying ${series.analysisUnit} records once.`;
+  const traced = traceMetric(
+    metric(
+      {
+        metricId: series.metricId,
+        label: series.label,
+        definition: formulaExplanation,
+        value: null,
+        unit: series.unit,
+        analysisUnit: series.analysisUnit,
+        sampleSize,
+        limitations: series.limitations,
+      },
+      period,
+    ),
+    filters,
+    provenance,
+    {
+      formulaExplanation,
+      missingDataHandling: series.metricId.includes("adjusted-fee")
+        ? "Daily points exclude sessions without a numeric transformed adjusted_fee and corresponding successful amount; a day with no usable pair is null, never zero."
+        : "Required source fields are runtime-validated. Days without records are omitted, and values are neither imputed nor interpolated.",
+      ...(series.metricId.endsWith("-rate")
+        ? {
+            denominator: {
+              unit: series.analysisUnit,
+              description:
+                "The eligible records assigned to each calendar day; the exact denominator is exposed as that point's sampleSize.",
+            },
+          }
+        : {}),
+      assumptions: [
+        `Calendar-day assignment uses ${period.timezone}.`,
+        "Each point exposes its own eligible sample size because daily denominators can differ.",
+      ],
+    },
+  ).traceability;
+  return traced === undefined ? series : { ...series, traceability: traced };
+};
+
 export const buildDailyTrends = (
   attempts: readonly PaymentAttempt[],
   merchantId: string,
@@ -1951,6 +2211,7 @@ export const buildDailyTrends = (
     points: attemptDays.map((day) => ({
       x: day,
       y: attemptsByDay.get(day)?.length ?? 0,
+      sampleSize: attemptsByDay.get(day)?.length ?? 0,
     })),
     limitations: commonLimitations,
   };
@@ -1970,6 +2231,7 @@ export const buildDailyTrends = (
           attemptsByDay
             .get(day)
             ?.filter((attempt) => attempt.status === status).length ?? 0,
+        sampleSize: attemptsByDay.get(day)?.length ?? 0,
       })),
       limitations: commonLimitations,
     });
@@ -1989,6 +2251,7 @@ export const buildDailyTrends = (
             dayAttempts.filter((attempt) => attempt.status === status).length,
             dayAttempts.length,
           ),
+          sampleSize: dayAttempts.length,
         };
       }),
       limitations: [
@@ -2002,7 +2265,9 @@ export const buildDailyTrends = (
       attemptStatusSeries("failed"),
       attemptRateSeries("succeeded"),
       attemptRateSeries("failed"),
-    ];
+    ].map((series) =>
+      traceDailySeries(series, evidenceFilters(filters, merchantId), provenance, period, scoped.length),
+    );
   }
 
   const sessionLimitations = [
@@ -2024,6 +2289,7 @@ export const buildDailyTrends = (
         sessionsByDay
           .get(day)
           ?.filter((session) => session.outcome === status).length ?? 0,
+      sampleSize: sessionsByDay.get(day)?.length ?? 0,
     })),
     limitations: sessionLimitations,
   });
@@ -2043,6 +2309,7 @@ export const buildDailyTrends = (
           daySessions.filter((session) => session.outcome === status).length,
           daySessions.length,
         ),
+        sampleSize: daySessions.length,
       };
     }),
     limitations: [
@@ -2060,6 +2327,7 @@ export const buildDailyTrends = (
       points: sessionDays.map((day) => ({
         x: day,
         y: sessionsByDay.get(day)?.length ?? 0,
+        sampleSize: sessionsByDay.get(day)?.length ?? 0,
       })),
       limitations: sessionLimitations,
     },
@@ -2079,6 +2347,7 @@ export const buildDailyTrends = (
           sessionsByDay
             .get(day)
             ?.filter((session) => session.attempts.length > 1).length ?? 0,
+        sampleSize: sessionsByDay.get(day)?.length ?? 0,
       })),
       limitations: sessionLimitations,
     },
@@ -2097,6 +2366,7 @@ export const buildDailyTrends = (
               .length,
             daySessions.length,
           ),
+          sampleSize: daySessions.length,
         };
       }),
       limitations: sessionLimitations,
@@ -2116,15 +2386,19 @@ export const buildDailyTrends = (
         metricId: `total-payment-volume-${sanitizeIdPart(currency)}`,
         unit: currency,
         analysisUnit: "payment_session",
-        points: sessionDays.map((day) => ({
-          x: day,
-          y: safeIntegerSum(
-            (sessionsByDay.get(day) ?? [])
-              .filter((session) => session.currency === currency)
-              .map((session) => session.representativeAmount),
+        points: sessionDays.map((day) => {
+          const daySessions = (sessionsByDay.get(day) ?? []).filter(
+            (session) => session.currency === currency,
+          );
+          return {
+            x: day,
+            y: safeIntegerSum(
+              daySessions.map((session) => session.representativeAmount),
             `trends.${day}.total-payment-volume-${currency}`,
-          ),
-        })),
+            ),
+            sampleSize: daySessions.length,
+          };
+        }),
         limitations: [
           ...sessionLimitations,
           "Amounts are summed once per session regardless of outcome and are not successful or settled volume.",
@@ -2136,19 +2410,21 @@ export const buildDailyTrends = (
         metricId: `successful-session-amount-${sanitizeIdPart(currency)}`,
         unit: currency,
         analysisUnit: "payment_session",
-        points: sessionDays.map((day) => ({
-          x: day,
-          y: safeIntegerSum(
-            (sessionsByDay.get(day) ?? [])
-              .filter(
-                (session) =>
-                  session.currency === currency &&
-                  session.outcome === "succeeded",
-              )
-              .map((session) => session.representativeAmount),
+        points: sessionDays.map((day) => {
+          const daySessions = (sessionsByDay.get(day) ?? []).filter(
+            (session) =>
+              session.currency === currency &&
+              session.outcome === "succeeded",
+          );
+          return {
+            x: day,
+            y: safeIntegerSum(
+              daySessions.map((session) => session.representativeAmount),
             `trends.${day}.successful-payment-volume-${currency}`,
-          ),
-        })),
+            ),
+            sampleSize: daySessions.length,
+          };
+        }),
         limitations: [
           ...sessionLimitations,
           "Failed, reversed, pending, and NoAttempt sessions are excluded from successful volume.",
@@ -2167,15 +2443,19 @@ export const buildDailyTrends = (
         metricId: `relative-adjusted-fee-to-amount-ratio-${sanitizeIdPart(currency)}`,
         unit: "percent",
         analysisUnit: "payment_session",
-        points: sessionDays.map((day) => ({
-          x: day,
-          y: relativeAdjustedFeeRatio(
+        points: sessionDays.map((day) => {
+          const dailyRatio = relativeAdjustedFeeRatio(
             (sessionsByDay.get(day) ?? []).filter(
               (session) => session.currency === currency,
             ),
             `trends.${day}.relative-adjusted-fee-${currency}`,
-          ).value,
-        })),
+          );
+          return {
+            x: day,
+            y: dailyRatio.value,
+            sampleSize: dailyRatio.sampleSize,
+          };
+        }),
         limitations: [
           ...sessionLimitations,
           ADJUSTED_FEE_DISCLOSURE.message,
@@ -2185,7 +2465,15 @@ export const buildDailyTrends = (
     }
   }
 
-  return sessionSeries;
+  return sessionSeries.map((series) =>
+    traceDailySeries(
+      series,
+      evidenceFilters(filters, merchantId),
+      provenance,
+      period,
+      sessions.length,
+    ),
+  );
 };
 
 interface MerchantSegmentObservation {
@@ -2464,7 +2752,17 @@ export const buildMerchantSegments = (
           period,
           sharedLimitations,
         ),
-      ],
+      ].map((item) =>
+        traceMetric(item, traceFilters(filters), provenance, {
+          referencePopulation: {
+            populationId: `segment:${definition.id}`,
+            label: definition.label,
+            sampleSize: members.length,
+            analysisUnit: "merchant",
+            method: `Descriptive equal-merchant median split using ${round(frequencyMedian)} sessions and ${displayPercentage(successMedian)} successful-session rate as thresholds.`,
+          },
+        }),
+      ),
       supportingEvidenceIds: [],
       limitations: [
         ...sharedLimitations,

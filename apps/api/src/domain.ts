@@ -189,10 +189,48 @@ export interface Metric {
     referenceLabel: string;
     referenceValue: number | null;
     delta: number | null;
+    population?: {
+      populationId: string;
+      label: string;
+      sampleSize: number;
+      analysisUnit: "merchant";
+      method: string;
+    };
   };
   disclosure?: {
     code: string;
     message: string;
+  };
+  traceability?: {
+    analysisUnit: AnalysisUnit | "merchant";
+    formula: {
+      label: string;
+      explanation: string;
+      methodologyReference?: string;
+    };
+    sourceMetricIds: string[];
+    filters: FilterState;
+    dateRange: DateRange;
+    sample: {
+      size: number;
+      analysisUnit: AnalysisUnit | "merchant";
+      denominator?: {
+        value?: number;
+        unit: string;
+        description: string;
+      };
+    };
+    referencePopulation?: {
+      populationId: string;
+      label: string;
+      sampleSize: number;
+      analysisUnit: "merchant";
+      method: string;
+    };
+    missingDataHandling: string;
+    assumptions: string[];
+    limitations: string[];
+    provenance: AnalysisProvenance & { sourceReference: string };
   };
   limitations: string[];
 }
@@ -279,8 +317,10 @@ export interface ChartSeries {
   points: Array<{
     x: string | number;
     y: number | null;
+    sampleSize?: number;
     evidenceId?: string;
   }>;
+  traceability?: NonNullable<Metric["traceability"]>;
   limitations: string[];
 }
 

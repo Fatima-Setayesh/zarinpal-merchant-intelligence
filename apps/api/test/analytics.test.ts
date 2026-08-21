@@ -482,6 +482,103 @@ describe("merchant analytics", () => {
     ).toHaveLength(2);
   });
 
+  it("benchmarks against equal-weight same-category merchant medians", () => {
+    const category = { id: "retail", label: "Retail" };
+    const peerAttempts = parsePaymentAttempts([
+      {
+        attemptId: "target-success",
+        sessionId: "target-s1",
+        merchantId: "target",
+        occurredAt: "2026-01-01T08:00:00Z",
+        amount: 100,
+        adjustedFee: 2,
+        currency: "IRR",
+        status: "succeeded",
+        merchantCategory: category,
+      },
+      {
+        attemptId: "target-failed",
+        sessionId: "target-s2",
+        merchantId: "target",
+        occurredAt: "2026-01-01T08:01:00Z",
+        amount: 200,
+        currency: "IRR",
+        status: "failed",
+        merchantCategory: category,
+      },
+      {
+        attemptId: "peer-1",
+        sessionId: "peer-1-s1",
+        merchantId: "peer-1",
+        occurredAt: "2026-01-01T09:00:00Z",
+        amount: 100,
+        adjustedFee: 1,
+        currency: "IRR",
+        status: "succeeded",
+        merchantCategory: category,
+      },
+      {
+        attemptId: "peer-2-success",
+        sessionId: "peer-2-s1",
+        merchantId: "peer-2",
+        occurredAt: "2026-01-01T09:01:00Z",
+        amount: 100,
+        adjustedFee: 4,
+        currency: "IRR",
+        status: "succeeded",
+        merchantCategory: category,
+      },
+      {
+        attemptId: "peer-2-failed",
+        sessionId: "peer-2-s2",
+        merchantId: "peer-2",
+        occurredAt: "2026-01-01T09:02:00Z",
+        amount: 100,
+        currency: "IRR",
+        status: "failed",
+        merchantCategory: category,
+      },
+      ...Array.from({ length: 20 }, (_, index) => ({
+        attemptId: `large-peer-${index}`,
+        sessionId: `large-peer-s${index}`,
+        merchantId: "large-peer",
+        occurredAt: new Date(Date.UTC(2026, 0, 2, 0, index)).toISOString(),
+        amount: 1_000,
+        currency: "IRR",
+        status: "failed" as const,
+        merchantCategory: category,
+      })),
+    ]);
+    const summary = buildMerchantSummary(
+      peerAttempts,
+      "target",
+      {},
+      provenance,
+    );
+
+    expect(
+      metricById(summary.headlineMetrics, "payment-session-count").comparison,
+    ).toMatchObject({ referenceValue: 2, delta: 0 });
+    expect(
+      metricById(summary.headlineMetrics, "successful-session-rate")
+        .comparison,
+    ).toMatchObject({ referenceValue: 50, delta: 0 });
+    expect(
+      metricById(summary.headlineMetrics, "total-payment-volume-IRR")
+        .comparison,
+    ).toMatchObject({ referenceValue: 200, delta: 100 });
+    expect(
+      metricById(
+        summary.headlineMetrics,
+        "relative-adjusted-fee-to-amount-ratio-IRR",
+      ).comparison,
+    ).toMatchObject({ referenceValue: 2.5, delta: -0.5 });
+    expect(
+      metricById(summary.headlineMetrics, "payment-session-count").comparison
+        ?.referenceLabel,
+    ).toContain("3 same-category peer merchants");
+  });
+
   it("generates actionable insights with complete traceability and causal caveats", () => {
     const insights = buildMerchantInsights(attempts, "m1", {}, provenance);
 
@@ -839,6 +936,33 @@ describe("descriptive merchant segments", () => {
     expect(
       segments.map((segment) => segment.limitations.join(" ")).join(" "),
     ).toContain("equal-merchant medians");
+    expect(
+      segments.every((segment) =>
+        segment.metrics.some((metric) =>
+          metric.metricId.endsWith(":failed-session-rate"),
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      segments.every((segment) =>
+        segment.metrics.some((metric) =>
+          metric.metricId.endsWith(":retry-session-rate"),
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      segments
+        .flatMap((segment) => segment.metrics)
+        .some((metric) => metric.metricId.includes("total-payment-volume")),
+    ).toBe(true);
+    const feeMetric = segments
+      .flatMap((segment) => segment.metrics)
+      .find((metric) =>
+        metric.metricId.includes("relative-adjusted-fee-to-amount-ratio"),
+      );
+    expect(feeMetric?.disclosure?.message).toContain(
+      "not Zarinpal's real fee",
+    );
   });
 });
 

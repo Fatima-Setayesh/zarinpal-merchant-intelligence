@@ -65,6 +65,22 @@ const round = (value: number, digits = 4): number => {
 const percentage = (numerator: number, denominator: number): number | null =>
   denominator === 0 ? null : round((numerator / denominator) * 100);
 
+const robustMedian = (values: readonly number[]): number => {
+  if (values.length === 0) {
+    throw new DomainValidationError("Cannot calculate median", [
+      { path: "values", message: "must contain at least one value" },
+    ]);
+  }
+  const ordered = [...values].sort((left, right) => left - right);
+  const midpoint = Math.floor(ordered.length / 2);
+  if (ordered.length % 2 === 1) {
+    return ordered[midpoint] ?? 0;
+  }
+  const left = ordered[midpoint - 1];
+  const right = ordered[midpoint];
+  return left === undefined || right === undefined ? 0 : (left + right) / 2;
+};
+
 const safeIntegerSum = (values: Iterable<number>, path: string): number => {
   let total = 0;
   for (const value of values) {
@@ -710,6 +726,204 @@ const relativeAdjustedFeeRatio = (
   };
 };
 
+interface MerchantPeerObservation {
+  merchantId: string;
+  categoryIds: Set<string>;
+  sessionCount: number;
+  successfulSessionCount: number;
+  failedSessionCount: number;
+  retrySessionCount: number;
+  volumeByCurrency: Map<string, number>;
+  adjustedFeeByCurrency: Map<string, number>;
+  adjustedFeeAmountByCurrency: Map<string, number>;
+}
+
+interface PeerBenchmark {
+  categoryId: string;
+  peerCount: number;
+  sessionCount: number;
+  successRate: number;
+  failureRate: number;
+  retryRate: number;
+  volumeByCurrency: Map<string, { value: number; peerCount: number }>;
+  adjustedFeeRatioByCurrency: Map<
+    string,
+    { value: number; peerCount: number }
+  >;
+}
+
+const addSafeMapValue = (
+  values: Map<string, number>,
+  key: string,
+  value: number,
+  path: string,
+): void => {
+  values.set(key, safeIntegerSum([values.get(key) ?? 0, value], path));
+};
+
+const buildMerchantPeerObservations = (
+  sessions: readonly PaymentSession[],
+): MerchantPeerObservation[] => {
+  const observations = new Map<string, MerchantPeerObservation>();
+  for (const session of sessions) {
+    let observation = observations.get(session.merchantId);
+    if (observation === undefined) {
+      observation = {
+        merchantId: session.merchantId,
+        categoryIds: new Set<string>(),
+        sessionCount: 0,
+        successfulSessionCount: 0,
+        failedSessionCount: 0,
+        retrySessionCount: 0,
+        volumeByCurrency: new Map<string, number>(),
+        adjustedFeeByCurrency: new Map<string, number>(),
+        adjustedFeeAmountByCurrency: new Map<string, number>(),
+      };
+      observations.set(session.merchantId, observation);
+    }
+    observation.sessionCount += 1;
+    observation.successfulSessionCount += Number(
+      session.outcome === "succeeded",
+    );
+    observation.failedSessionCount += Number(session.outcome === "failed");
+    observation.retrySessionCount += Number(session.attempts.length > 1);
+    for (const categoryId of unique([
+      ...(session.merchantCategory === undefined
+        ? []
+        : [session.merchantCategory.id]),
+      ...session.attempts.flatMap((attempt) =>
+        attempt.merchantCategory === undefined
+          ? []
+          : [attempt.merchantCategory.id],
+      ),
+    ])) {
+      observation.categoryIds.add(categoryId);
+    }
+    addSafeMapValue(
+      observation.volumeByCurrency,
+      session.currency,
+      session.representativeAmount,
+      `peers.${session.merchantId}.volume.${session.currency}`,
+    );
+    const successful = successfulAttempt(session);
+    if (successful !== undefined && typeof successful.adjustedFee === "number") {
+      addSafeMapValue(
+        observation.adjustedFeeByCurrency,
+        session.currency,
+        successful.adjustedFee,
+        `peers.${session.merchantId}.adjustedFee.${session.currency}`,
+      );
+      addSafeMapValue(
+        observation.adjustedFeeAmountByCurrency,
+        session.currency,
+        successful.amount,
+        `peers.${session.merchantId}.adjustedFeeAmount.${session.currency}`,
+      );
+    }
+  }
+  return [...observations.values()];
+};
+
+const buildPeerBenchmark = (
+  attempts: readonly PaymentAttempt[],
+  sourceSessions: readonly PaymentSession[] | undefined,
+  merchantId: string,
+  filters: FilterState,
+): PeerBenchmark | undefined => {
+  const populationFilters: FilterState = { ...filters };
+  delete populationFilters.merchantIds;
+  const populationSessions = filterPaymentSessions(
+    sourceSessions ?? buildPaymentSessions(attempts),
+    populationFilters,
+  );
+  const observations = buildMerchantPeerObservations(populationSessions);
+  const target = observations.find(
+    (observation) => observation.merchantId === merchantId,
+  );
+  if (target === undefined || target.categoryIds.size !== 1) {
+    return undefined;
+  }
+  const categoryId = [...target.categoryIds][0];
+  if (categoryId === undefined) {
+    return undefined;
+  }
+  const peers = observations.filter(
+    (observation) =>
+      observation.merchantId !== merchantId &&
+      observation.categoryIds.size === 1 &&
+      observation.categoryIds.has(categoryId),
+  );
+  if (peers.length < 2) {
+    return undefined;
+  }
+  const medianRate = (
+    numerator: (observation: MerchantPeerObservation) => number,
+  ): number =>
+    round(
+      robustMedian(
+        peers.map(
+          (observation) =>
+            percentage(numerator(observation), observation.sessionCount) ?? 0,
+        ),
+      ),
+    );
+  const volumeByCurrency = new Map<
+    string,
+    { value: number; peerCount: number }
+  >();
+  const adjustedFeeRatioByCurrency = new Map<
+    string,
+    { value: number; peerCount: number }
+  >();
+  for (const currency of unique(
+    peers.flatMap((peer) => [...peer.volumeByCurrency.keys()]),
+  ).sort()) {
+    const volumes = peers.flatMap((peer) => {
+      const value = peer.volumeByCurrency.get(currency);
+      return value === undefined ? [] : [value];
+    });
+    volumeByCurrency.set(currency, {
+      value: robustMedian(volumes),
+      peerCount: volumes.length,
+    });
+    const feeRatios = peers.flatMap((peer) => {
+      const adjustedFee = peer.adjustedFeeByCurrency.get(currency);
+      const amount = peer.adjustedFeeAmountByCurrency.get(currency);
+      const value =
+        adjustedFee === undefined || amount === undefined
+          ? null
+          : percentage(adjustedFee, amount);
+      return value === null ? [] : [value];
+    });
+    if (feeRatios.length >= 2) {
+      adjustedFeeRatioByCurrency.set(currency, {
+        value: round(robustMedian(feeRatios)),
+        peerCount: feeRatios.length,
+      });
+    }
+  }
+  return {
+    categoryId,
+    peerCount: peers.length,
+    sessionCount: robustMedian(peers.map((peer) => peer.sessionCount)),
+    successRate: medianRate((peer) => peer.successfulSessionCount),
+    failureRate: medianRate((peer) => peer.failedSessionCount),
+    retryRate: medianRate((peer) => peer.retrySessionCount),
+    volumeByCurrency,
+    adjustedFeeRatioByCurrency,
+  };
+};
+
+const peerComparison = (
+  value: number | null,
+  referenceValue: number,
+  referenceLabel: string,
+): NonNullable<Metric["comparison"]> => ({
+  referenceLabel,
+  referenceValue,
+  delta: value === null ? null : round(value - referenceValue),
+});
+
 const countAvailableInsights = (
   sessions: readonly PaymentSession[],
 ): number => {
@@ -752,11 +966,34 @@ export const buildMerchantSummary = (
     sessions.map((session) => session.attempts.length),
     "headlineMetrics.payment-attempt-count",
   );
+  const successfulSessionRate = percentage(
+    succeededSessionCount,
+    sessions.length,
+  );
+  const failedSessionRate = percentage(failedSessionCount, sessions.length);
+  const retrySessionRate = percentage(retrySessions.length, sessions.length);
+  const identity = merchantIdentity(scoped, merchantId, sessions);
+  const peerBenchmark = buildPeerBenchmark(
+    attempts,
+    sourceSessions,
+    merchantId,
+    filters,
+  );
+  const peerLabel =
+    peerBenchmark === undefined
+      ? undefined
+      : `Median of ${peerBenchmark.peerCount} same-category peer merchants (${peerBenchmark.categoryId})`;
   const limitations = [
     ...summaryLimitations(scoped, sessions),
     filterSemanticsLimitation(filters),
+    ...(peerBenchmark === undefined
+      ? [
+          "Peer comparison is unavailable unless at least two other single-category merchants share the merchant's category in the selected scope.",
+        ]
+      : [
+          `Peer comparisons use equal-merchant medians across ${peerBenchmark.peerCount} other merchants in category ${peerBenchmark.categoryId}; high-volume merchants do not receive extra benchmark weight.`,
+        ]),
   ];
-  const identity = merchantIdentity(scoped, merchantId, sessions);
 
   const headlineMetrics: Metric[] = [
     metric(
@@ -768,6 +1005,15 @@ export const buildMerchantSummary = (
         unit: "count",
         analysisUnit: "payment_session",
         sampleSize: sessions.length,
+        ...(peerLabel === undefined || peerBenchmark === undefined
+          ? {}
+          : {
+              comparison: peerComparison(
+                sessions.length,
+                peerBenchmark.sessionCount,
+                peerLabel,
+              ),
+            }),
         limitations: [SESSION_LIMITATION],
       },
       period,
@@ -792,10 +1038,19 @@ export const buildMerchantSummary = (
         label: "Successful payment-session rate",
         definition:
           "Payment sessions with at least one successful attempt divided by all payment sessions in scope.",
-        value: percentage(succeededSessionCount, sessions.length),
+        value: successfulSessionRate,
         unit: "percent",
         analysisUnit: "payment_session",
         sampleSize: sessions.length,
+        ...(peerLabel === undefined || peerBenchmark === undefined
+          ? {}
+          : {
+              comparison: peerComparison(
+                successfulSessionRate,
+                peerBenchmark.successRate,
+                peerLabel,
+              ),
+            }),
         limitations: [SESSION_LIMITATION, DESCRIPTIVE_LIMITATION],
       },
       period,
@@ -820,10 +1075,19 @@ export const buildMerchantSummary = (
         label: "Failed payment-session rate",
         definition:
           "Failed sessions, including source NoAttempt sessions, divided by all payment sessions in scope.",
-        value: percentage(failedSessionCount, sessions.length),
+        value: failedSessionRate,
         unit: "percent",
         analysisUnit: "payment_session",
         sampleSize: sessions.length,
+        ...(peerLabel === undefined || peerBenchmark === undefined
+          ? {}
+          : {
+              comparison: peerComparison(
+                failedSessionRate,
+                peerBenchmark.failureRate,
+                peerLabel,
+              ),
+            }),
         limitations: [SESSION_LIMITATION, DESCRIPTIVE_LIMITATION],
       },
       period,
@@ -847,10 +1111,19 @@ export const buildMerchantSummary = (
         label: "Multi-attempt payment-session rate",
         definition:
           "Payment sessions with more than one attempt, divided by all payment sessions in scope.",
-        value: percentage(retrySessions.length, sessions.length),
+        value: retrySessionRate,
         unit: "percent",
         analysisUnit: "payment_session",
         sampleSize: sessions.length,
+        ...(peerLabel === undefined || peerBenchmark === undefined
+          ? {}
+          : {
+              comparison: peerComparison(
+                retrySessionRate,
+                peerBenchmark.retryRate,
+                peerLabel,
+              ),
+            }),
         limitations: [SESSION_LIMITATION, DESCRIPTIVE_LIMITATION],
       },
       period,
@@ -929,6 +1202,11 @@ export const buildMerchantSummary = (
     const failedSessions = currencySessions.filter(
       (session) => session.outcome === "failed",
     );
+    const totalVolume = safeIntegerSum(
+      currencySessions.map((session) => session.representativeAmount),
+      `headlineMetrics.total-payment-volume-${currency}`,
+    );
+    const peerVolume = peerBenchmark?.volumeByCurrency.get(currency);
     headlineMetrics.push(
       metric(
         {
@@ -936,10 +1214,7 @@ export const buildMerchantSummary = (
           label: `Total observed payment volume (${currency})`,
           definition:
             "Source amount summed once per payment session regardless of outcome; this is observed requested volume, not successful or settled volume.",
-          value: safeIntegerSum(
-            currencySessions.map((session) => session.representativeAmount),
-            `headlineMetrics.total-payment-volume-${currency}`,
-          ),
+          value: totalVolume,
           unit: currency,
           analysisUnit: "payment_session",
           sampleSize: currencySessions.length,
@@ -947,6 +1222,15 @@ export const buildMerchantSummary = (
             code: "NO_CURRENCY_CONVERSION",
             message: `This amount includes only ${currency}; no currency conversion was applied.`,
           },
+          ...(peerVolume === undefined || peerBenchmark === undefined
+            ? {}
+            : {
+                comparison: peerComparison(
+                  totalVolume,
+                  peerVolume.value,
+                  `Median of ${peerVolume.peerCount} same-category peer merchants (${peerBenchmark.categoryId})`,
+                ),
+              }),
           limitations: [SESSION_LIMITATION, DESCRIPTIVE_LIMITATION],
         },
         period,
@@ -1000,6 +1284,8 @@ export const buildMerchantSummary = (
       `headlineMetrics.relative-adjusted-fee-${currency}`,
     );
     if (adjustedFeeRatio.sampleSize > 0) {
+      const peerAdjustedFeeRatio =
+        peerBenchmark?.adjustedFeeRatioByCurrency.get(currency);
       headlineMetrics.push(
         metric(
           {
@@ -1012,6 +1298,15 @@ export const buildMerchantSummary = (
             analysisUnit: "payment_session",
             sampleSize: adjustedFeeRatio.sampleSize,
             disclosure: ADJUSTED_FEE_DISCLOSURE,
+            ...(peerAdjustedFeeRatio === undefined
+              ? {}
+              : {
+                  comparison: peerComparison(
+                    adjustedFeeRatio.value,
+                    peerAdjustedFeeRatio.value,
+                    `Median of ${peerAdjustedFeeRatio.peerCount} same-category peer merchants with available adjusted_fee (${peerBenchmark?.categoryId ?? "unknown category"})`,
+                  ),
+                }),
             limitations: [
               ADJUSTED_FEE_DISCLOSURE.message,
               DESCRIPTIVE_LIMITATION,
@@ -1540,22 +1835,6 @@ export const buildDailyTrends = (
   return sessionSeries;
 };
 
-const median = (values: readonly number[]): number => {
-  if (values.length === 0) {
-    throw new DomainValidationError("Cannot calculate median", [
-      { path: "values", message: "must contain at least one value" },
-    ]);
-  }
-  const ordered = [...values].sort((left, right) => left - right);
-  const midpoint = Math.floor(ordered.length / 2);
-  if (ordered.length % 2 === 1) {
-    return ordered[midpoint] ?? 0;
-  }
-  const left = ordered[midpoint - 1];
-  const right = ordered[midpoint];
-  return left === undefined || right === undefined ? 0 : (left + right) / 2;
-};
-
 interface MerchantSegmentObservation {
   merchantId: string;
   sessionCount: number;
@@ -1606,6 +1885,107 @@ const SEGMENT_DEFINITIONS: readonly SegmentDefinition[] = [
   },
 ];
 
+const buildSegmentOperationalMetrics = (
+  segmentId: string,
+  sessions: readonly PaymentSession[],
+  period: DateRange,
+  limitations: string[],
+): Metric[] => {
+  const failedSessions = sessions.filter(
+    (session) => session.outcome === "failed",
+  );
+  const retrySessions = sessions.filter(
+    (session) => session.attempts.length > 1,
+  );
+  const metrics: Metric[] = [
+    metric(
+      {
+        metricId: `${segmentId}:failed-session-rate`,
+        label: "Failed payment-session rate",
+        definition:
+          "Failed payment sessions divided by all sessions represented in this segment.",
+        value: percentage(failedSessions.length, sessions.length),
+        unit: "percent",
+        analysisUnit: "payment_session",
+        sampleSize: sessions.length,
+        limitations,
+      },
+      period,
+    ),
+    metric(
+      {
+        metricId: `${segmentId}:retry-session-rate`,
+        label: "Multi-attempt payment-session rate",
+        definition:
+          "Sessions with more than one attempt divided by all sessions represented in this segment.",
+        value: percentage(retrySessions.length, sessions.length),
+        unit: "percent",
+        analysisUnit: "payment_session",
+        sampleSize: sessions.length,
+        limitations,
+      },
+      period,
+    ),
+  ];
+  for (const currency of unique(
+    sessions.map((session) => session.currency),
+  ).sort()) {
+    const currencySessions = sessions.filter(
+      (session) => session.currency === currency,
+    );
+    metrics.push(
+      metric(
+        {
+          metricId: `${segmentId}:total-payment-volume-${sanitizeIdPart(currency)}`,
+          label: `Total observed payment volume (${currency})`,
+          definition:
+            "Source amount summed once per represented payment session regardless of outcome.",
+          value: safeIntegerSum(
+            currencySessions.map((session) => session.representativeAmount),
+            `segments.${segmentId}.total-payment-volume-${currency}`,
+          ),
+          unit: currency,
+          analysisUnit: "payment_session",
+          sampleSize: currencySessions.length,
+          limitations: [
+            ...limitations,
+            "Observed volume is requested session amount, not successful or settled volume.",
+          ],
+        },
+        period,
+      ),
+    );
+    const adjustedFeeRatio = relativeAdjustedFeeRatio(
+      currencySessions,
+      `segments.${segmentId}.relative-adjusted-fee-${currency}`,
+    );
+    if (adjustedFeeRatio.sampleSize > 0) {
+      metrics.push(
+        metric(
+          {
+            metricId: `${segmentId}:relative-adjusted-fee-to-amount-ratio-${sanitizeIdPart(currency)}`,
+            label: `Relative adjusted-fee-to-amount ratio (${currency})`,
+            definition:
+              "Sum of available transformed adjusted_fee divided by corresponding successful payment amounts.",
+            value: adjustedFeeRatio.value,
+            unit: "percent",
+            analysisUnit: "payment_session",
+            sampleSize: adjustedFeeRatio.sampleSize,
+            disclosure: ADJUSTED_FEE_DISCLOSURE,
+            limitations: [
+              ...limitations,
+              ADJUSTED_FEE_DISCLOSURE.message,
+              "Missing adjusted_fee values are excluded from both numerator and denominator.",
+            ],
+          },
+          period,
+        ),
+      );
+    }
+  }
+  return metrics;
+};
+
 export const buildMerchantSegments = (
   attempts: readonly PaymentAttempt[],
   filters: FilterState,
@@ -1646,10 +2026,10 @@ export const buildMerchantSegments = (
         percentage(successfulSessionCount, merchantSessions.length) ?? 0,
     });
   }
-  const frequencyMedian = median(
+  const frequencyMedian = robustMedian(
     observations.map((observation) => observation.sessionCount),
   );
-  const successMedian = median(
+  const successMedian = robustMedian(
     observations.map((observation) => observation.successRate),
   );
   const sharedLimitations = [
@@ -1679,6 +2059,9 @@ export const buildMerchantSegments = (
     const representedSuccessfulSessions = members.reduce(
       (total, member) => total + member.successfulSessionCount,
       0,
+    );
+    const memberSessions = members.flatMap(
+      (member) => sessionsByMerchant.get(member.merchantId) ?? [],
     );
     segments.push({
       segmentId: definition.id,
@@ -1721,6 +2104,12 @@ export const buildMerchantSegments = (
             limitations: sharedLimitations,
           },
           period,
+        ),
+        ...buildSegmentOperationalMetrics(
+          definition.id,
+          memberSessions,
+          period,
+          sharedLimitations,
         ),
       ],
       supportingEvidenceIds: [],

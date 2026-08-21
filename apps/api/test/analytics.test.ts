@@ -346,6 +346,13 @@ describe("merchant analytics", () => {
       provenance,
       sourceSessions,
     );
+    const failureInsight = buildMerchantInsights(
+      attempts,
+      "m1",
+      {},
+      provenance,
+      sourceSessions,
+    ).find((insight) => insight.insightId.endsWith("failed-sessions"));
 
     expect(sourceSessions.flatMap((session) => session.attempts)).toHaveLength(
       attempts.length,
@@ -409,6 +416,8 @@ describe("merchant analytics", () => {
       trends.find((series) => series.metricId === "total-payment-volume-IRR")
         ?.points,
     ).toContainEqual({ x: "2026-01-03", y: 400 });
+    expect(failureInsight?.observation).toContain("2 of 4");
+    expect(failureInsight?.businessImpact).toContain("700 IRR");
   });
 
   it("excludes missing adjusted_fee pairs from ratio denominators", () => {
@@ -579,6 +588,98 @@ describe("merchant analytics", () => {
     ).toContain("3 same-category peer merchants");
   });
 
+  it("turns peer gaps into traceable ranked insights without fee overclaiming", () => {
+    const category = { id: "retail", label: "Retail" };
+    const insightAttempts = parsePaymentAttempts([
+      ...["target-s1", "target-s2"].map((sessionId, index) => ({
+        attemptId: `${sessionId}-attempt`,
+        sessionId,
+        merchantId: "target",
+        occurredAt: `2026-01-01T08:0${index}:00Z`,
+        amount: 100,
+        adjustedFee: 10,
+        currency: "IRR",
+        status: "succeeded" as const,
+        merchantCategory: category,
+      })),
+      ...["target-s3", "target-s4"].map((sessionId, index) => ({
+        attemptId: `${sessionId}-attempt`,
+        sessionId,
+        merchantId: "target",
+        occurredAt: `2026-01-01T08:1${index}:00Z`,
+        amount: index === 0 ? 200 : 300,
+        currency: "IRR",
+        status: "failed" as const,
+        merchantCategory: category,
+      })),
+      {
+        attemptId: "peer-1-success",
+        sessionId: "peer-1-s1",
+        merchantId: "peer-1",
+        occurredAt: "2026-01-01T09:00:00Z",
+        amount: 100,
+        adjustedFee: 1,
+        currency: "IRR",
+        status: "succeeded",
+        merchantCategory: category,
+      },
+      {
+        attemptId: "peer-2-success",
+        sessionId: "peer-2-s1",
+        merchantId: "peer-2",
+        occurredAt: "2026-01-01T09:01:00Z",
+        amount: 100,
+        adjustedFee: 2,
+        currency: "IRR",
+        status: "succeeded",
+        merchantCategory: category,
+      },
+      {
+        attemptId: "peer-2-failed",
+        sessionId: "peer-2-s2",
+        merchantId: "peer-2",
+        occurredAt: "2026-01-01T09:02:00Z",
+        amount: 100,
+        currency: "IRR",
+        status: "failed",
+        merchantCategory: category,
+      },
+    ]);
+    const insights = buildMerchantInsights(
+      insightAttempts,
+      "target",
+      {},
+      provenance,
+    );
+    const failure = insights.find((insight) =>
+      insight.insightId.endsWith("failed-sessions"),
+    );
+    const fee = insights.find((insight) =>
+      insight.insightId.includes("relative-adjusted-fee"),
+    );
+
+    expect(insights.map((insight) => insight.priority)).toEqual([
+      "high",
+      "medium",
+    ]);
+    expect(failure?.evidence[0]?.metric.comparison).toMatchObject({
+      referenceValue: 25,
+      delta: 25,
+    });
+    expect(failure?.evidence[0]?.comparedGroups?.[1]?.sampleSize).toBe(2);
+    expect(failure?.businessImpact).toContain("500 IRR");
+    expect(failure?.businessImpact).toContain("not proven loss");
+    expect(fee?.evidence[0]?.metric.comparison).toMatchObject({
+      referenceValue: 1.5,
+      delta: 8.5,
+    });
+    expect(fee?.evidence[0]?.metric.disclosure?.message).toContain(
+      "not Zarinpal's real fee",
+    );
+    expect(fee?.businessImpact).toContain("cannot support an estimate");
+    expect(fee?.recommendations[0]?.action).toContain("amount band");
+  });
+
   it("generates actionable insights with complete traceability and causal caveats", () => {
     const insights = buildMerchantInsights(attempts, "m1", {}, provenance);
 
@@ -587,9 +688,10 @@ describe("merchant analytics", () => {
       insight.insightId.endsWith("retry-recovery"),
     );
     expect(retryInsight?.observation).toContain("1 of 1");
-    expect(retryInsight?.recommendations[0]?.supportingEvidenceIds).toEqual([
-      retryInsight?.evidence[0]?.evidenceId,
-    ]);
+    expect(retryInsight?.recommendations[0]?.supportingEvidenceIds).toEqual(
+      retryInsight?.evidence.map((evidence) => evidence.evidenceId),
+    );
+    expect(retryInsight?.businessImpact).toContain("100 IRR");
     expect(retryInsight?.evidence[0]?.filters.merchantIds).toEqual(["m1"]);
     expect(retryInsight?.evidence[0]?.sample.analysisUnit).toBe(
       "payment_session",

@@ -924,12 +924,59 @@ const peerComparison = (
   delta: value === null ? null : round(value - referenceValue),
 });
 
+interface RelativeFeeDeviation {
+  currency: string;
+  value: number;
+  sampleSize: number;
+  peerValue: number;
+  peerCount: number;
+  delta: number;
+}
+
+const relativeFeeDeviations = (
+  sessions: readonly PaymentSession[],
+  peerBenchmark: PeerBenchmark | undefined,
+): RelativeFeeDeviation[] => {
+  if (peerBenchmark === undefined) {
+    return [];
+  }
+  const deviations: RelativeFeeDeviation[] = [];
+  for (const [currency, peerRatio] of peerBenchmark.adjustedFeeRatioByCurrency) {
+    const target = relativeAdjustedFeeRatio(
+      sessions.filter((session) => session.currency === currency),
+      `insights.relative-adjusted-fee-${currency}`,
+    );
+    if (target.value === null || target.sampleSize < 2) {
+      continue;
+    }
+    const delta = round(target.value - peerRatio.value);
+    if (Math.abs(delta) < 0.5) {
+      continue;
+    }
+    deviations.push({
+      currency,
+      value: target.value,
+      sampleSize: target.sampleSize,
+      peerValue: peerRatio.value,
+      peerCount: peerRatio.peerCount,
+      delta,
+    });
+  }
+  return deviations.sort(
+    (left, right) =>
+      Math.abs(right.delta) - Math.abs(left.delta) ||
+      left.currency.localeCompare(right.currency),
+  );
+};
+
 const countAvailableInsights = (
   sessions: readonly PaymentSession[],
+  peerBenchmark?: PeerBenchmark,
 ): number => {
   const failed = sessions.some((session) => session.outcome === "failed");
   const initiallyUnsuccessful = sessions.some(isInitiallyUnsuccessfulRetry);
-  return Number(failed) + Number(initiallyUnsuccessful);
+  const feeDeviation = relativeFeeDeviations(sessions, peerBenchmark).length > 0;
+  return Number(failed) + Number(initiallyUnsuccessful) + Number(feeDeviation);
 };
 
 export const buildMerchantSummary = (
@@ -1326,7 +1373,7 @@ export const buildMerchantSummary = (
     reportingPeriod: period,
     analysisUnit: "payment_session",
     headlineMetrics,
-    availableInsightCount: countAvailableInsights(sessions),
+    availableInsightCount: countAvailableInsights(sessions, peerBenchmark),
     limitations: unique([...limitations, ...identity.limitations]),
   };
 };
@@ -1341,6 +1388,7 @@ const makeEvidence = (
   missingDataHandling: string,
   limitations: string[],
   provenance: AnalysisProvenance,
+  comparedGroups?: Evidence["comparedGroups"],
 ): Evidence => ({
   evidenceId,
   metric: evidenceMetric,
@@ -1358,9 +1406,75 @@ const makeEvidence = (
       : {}),
   },
   missingDataHandling,
+  ...(comparedGroups === undefined ? {} : { comparedGroups }),
   limitations,
   sourceReference: sourceReference(provenance),
 });
+
+const buildSessionAmountEvidence = (
+  sessions: readonly PaymentSession[],
+  merchantId: string,
+  metricPrefix: string,
+  labelPrefix: string,
+  definition: string,
+  filters: FilterState,
+  period: DateRange,
+  limitations: string[],
+  provenance: AnalysisProvenance,
+): Evidence[] =>
+  unique(sessions.map((session) => session.currency))
+    .sort()
+    .map((currency) => {
+      const currencySessions = sessions.filter(
+        (session) => session.currency === currency,
+      );
+      const amountMetric = metric(
+        {
+          metricId: `${metricPrefix}-${sanitizeIdPart(currency)}`,
+          label: `${labelPrefix} (${currency})`,
+          definition,
+          value: safeIntegerSum(
+            currencySessions.map((session) => session.representativeAmount),
+            `insights.${metricPrefix}.${currency}`,
+          ),
+          unit: currency,
+          analysisUnit: "payment_session",
+          sampleSize: currencySessions.length,
+          limitations,
+        },
+        period,
+      );
+      return makeEvidence(
+        `evidence:${sanitizeIdPart(merchantId)}:${metricPrefix}-${sanitizeIdPart(currency)}`,
+        amountMetric,
+        filters,
+        period,
+        `${labelPrefix} (${currency})`,
+        "Sum the source amount once for each qualifying payment session; currencies are never converted or combined.",
+        "Session amount is required and runtime-validated. No missing amount is imputed, and repeated attempts are not counted again.",
+        limitations,
+        provenance,
+      );
+    });
+
+const evidenceAmountText = (evidence: readonly Evidence[]): string =>
+  evidence
+    .map((item) => `${String(item.metric.value)} ${item.metric.unit}`)
+    .join(", ");
+
+const rankInsights = (insights: Insight[]): Insight[] => {
+  const priorityRank = new Map([
+    ["high", 0],
+    ["medium", 1],
+    ["low", 2],
+  ]);
+  return insights.sort(
+    (left, right) =>
+      (priorityRank.get(left.priority ?? "low") ?? 3) -
+        (priorityRank.get(right.priority ?? "low") ?? 3) ||
+      left.insightId.localeCompare(right.insightId),
+  );
+};
 
 export const buildMerchantInsights = (
   attempts: readonly PaymentAttempt[],
@@ -1378,11 +1492,48 @@ export const buildMerchantInsights = (
   );
   const period = resolvePeriod(scoped, filters, provenance, sessions);
   const canonicalFilters = evidenceFilters(filters, merchantId);
+  const peerBenchmark = buildPeerBenchmark(
+    attempts,
+    sourceSessions,
+    merchantId,
+    filters,
+  );
+  const peerLabel =
+    peerBenchmark === undefined
+      ? undefined
+      : `Median of ${peerBenchmark.peerCount} same-category peer merchants`;
+  const comparedGroups =
+    peerBenchmark === undefined
+      ? undefined
+      : [
+          {
+            groupId: merchantId,
+            label: "Selected merchant payment sessions",
+            sampleSize: sessions.length,
+          },
+          {
+            groupId: `category:${peerBenchmark.categoryId}:peers`,
+            label: `Same-category peer merchants (${peerBenchmark.categoryId})`,
+            sampleSize: peerBenchmark.peerCount,
+          },
+        ];
   const insightLimitations = [
     DESCRIPTIVE_LIMITATION,
     SESSION_LIMITATION,
     CONFOUNDING_LIMITATION,
     filterSemanticsLimitation(filters),
+    ...(sessions.length < 30
+      ? [
+          `Only ${sessions.length} payment sessions are in scope; rates and opportunity estimates may be unstable at this sample size.`,
+        ]
+      : []),
+    ...(peerBenchmark === undefined
+      ? [
+          "No robust same-category comparison is shown because the target has no single category or fewer than two eligible peer merchants are available.",
+        ]
+      : [
+          `Peer references are equal-merchant medians across ${peerBenchmark.peerCount} same-category merchants, so the largest merchants do not dominate the comparison.`,
+        ]),
   ];
   const insights: Insight[] = [];
 
@@ -1391,6 +1542,10 @@ export const buildMerchantInsights = (
   );
   if (failedSessions.length > 0) {
     const failureRate = percentage(failedSessions.length, sessions.length);
+    const peerGap =
+      peerBenchmark === undefined || failureRate === null
+        ? null
+        : round(failureRate - peerBenchmark.failureRate);
     const evidenceId = `evidence:${sanitizeIdPart(merchantId)}:failed-sessions`;
     const failureMetric = metric(
       {
@@ -1402,6 +1557,15 @@ export const buildMerchantInsights = (
         unit: "percent",
         analysisUnit: "payment_session",
         sampleSize: sessions.length,
+        ...(peerBenchmark === undefined || peerLabel === undefined
+          ? {}
+          : {
+              comparison: peerComparison(
+                failureRate,
+                peerBenchmark.failureRate,
+                peerLabel,
+              ),
+            }),
         limitations: insightLimitations,
       },
       period,
@@ -1416,15 +1580,46 @@ export const buildMerchantInsights = (
       "Required attempt and preserved-session fields are runtime-validated. NoAttempt rows remain zero-attempt sessions. Pending sessions remain in the denominator and are not counted as failed.",
       insightLimitations,
       provenance,
+      comparedGroups,
     );
+    const amountEvidence = buildSessionAmountEvidence(
+      failedSessions,
+      merchantId,
+      "failed-session-requested-amount",
+      "Requested amount of failed payment sessions",
+      "Source-requested payment amount associated with failed sessions; this is not realized loss or recoverable revenue.",
+      canonicalFilters,
+      period,
+      insightLimitations,
+      provenance,
+    );
+    const opportunitySessions =
+      peerGap !== null && peerGap > 0
+        ? Math.round((peerGap / 100) * sessions.length)
+        : 0;
+    const peerObservation =
+      peerGap === null
+        ? ""
+        : ` This is ${Math.abs(peerGap).toFixed(1)} percentage points ${peerGap > 0 ? "above" : "below"} the equal-merchant same-category peer median.`;
+    const opportunityText =
+      opportunitySessions > 0
+        ? ` At the current session count, closing the observed peer gap corresponds to approximately ${opportunitySessions} fewer failed sessions; this is a descriptive scenario, not a causal forecast.`
+        : "";
     insights.push({
       insightId: `insight:${sanitizeIdPart(merchantId)}:failed-sessions`,
       merchantId,
-      title: "Some payment sessions ended without a recorded success",
-      observation: `${failedSessions.length} of ${sessions.length} payment sessions (${displayPercentage(failureRate)}) ended failed without a recorded success in the selected scope.`,
-      businessImpact:
-        "These observed checkout journeys did not record a successful outcome, so reviewing their operational failure context may reveal avoidable friction.",
-      evidence: [evidence],
+      title:
+        peerGap !== null && peerGap >= 5
+          ? "Failed-session rate is above same-category peers"
+          : "Failed sessions form a measurable operational review queue",
+      observation: `${failedSessions.length} of ${sessions.length} payment sessions (${displayPercentage(failureRate)}) ended failed without a recorded success.${peerObservation}`,
+      businessImpact: `${evidenceAmountText(amountEvidence)} in requested payment amount is associated with these failed sessions. This is observed checkout volume, not proven loss or recoverable revenue.${opportunityText}`,
+      priority:
+        (peerGap !== null && peerGap >= 10) ||
+        (failureRate !== null && failureRate >= 25)
+          ? "high"
+          : "medium",
+      evidence: [evidence, ...amountEvidence],
       recommendations: [
         {
           recommendationId: `recommendation:${sanitizeIdPart(merchantId)}:review-failures`,
@@ -1432,7 +1627,10 @@ export const buildMerchantInsights = (
             "Review operational logs for the affected failed sessions and group failure reasons by time, terminal, and issuer before changing the payment flow.",
           rationale:
             "The records establish where success was absent, but not why; inspecting source failure context is the next evidence-building step.",
-          supportingEvidenceIds: [evidenceId],
+          supportingEvidenceIds: [
+            evidenceId,
+            ...amountEvidence.map((item) => item.evidenceId),
+          ],
           caveats: [
             "Do not attribute the failures to a terminal, issuer, customer, or product change without controlled supporting evidence.",
           ],
@@ -1457,6 +1655,9 @@ export const buildMerchantInsights = (
     ];
     const recovered = initiallyUnsuccessful.filter(
       (session) => session.outcome === "succeeded",
+    );
+    const unrecovered = initiallyUnsuccessful.filter(
+      (session) => session.outcome !== "succeeded",
     );
     const recoveryRate = percentage(
       recovered.length,
@@ -1488,14 +1689,94 @@ export const buildMerchantInsights = (
       retryLimitations,
       provenance,
     );
+    const recoveredAmountEvidence = buildSessionAmountEvidence(
+      recovered,
+      merchantId,
+      "recovered-retry-session-requested-amount",
+      "Requested amount of recovered retry sessions",
+      "Source-requested amount associated with initially unsuccessful sessions that later recorded success.",
+      canonicalFilters,
+      period,
+      retryLimitations,
+      provenance,
+    );
+    const unrecoveredAmountEvidence = buildSessionAmountEvidence(
+      unrecovered,
+      merchantId,
+      "unrecovered-retry-session-requested-amount",
+      "Requested amount of unrecovered retry sessions",
+      "Source-requested amount associated with initially unsuccessful multi-attempt sessions without a later recorded success.",
+      canonicalFilters,
+      period,
+      retryLimitations,
+      provenance,
+    );
+    const retryRate = percentage(
+      sessions.filter((session) => session.attempts.length > 1).length,
+      sessions.length,
+    );
+    const retryRateEvidence =
+      peerBenchmark === undefined || peerLabel === undefined
+        ? []
+        : [
+            makeEvidence(
+              `evidence:${sanitizeIdPart(merchantId)}:retry-session-rate`,
+              metric(
+                {
+                  metricId: "retry-session-rate",
+                  label: "Payment sessions with multiple attempts",
+                  definition:
+                    "Payment sessions with more than one attempt divided by all payment sessions in scope.",
+                  value: retryRate,
+                  unit: "percent",
+                  analysisUnit: "payment_session",
+                  sampleSize: sessions.length,
+                  comparison: peerComparison(
+                    retryRate,
+                    peerBenchmark.retryRate,
+                    peerLabel,
+                  ),
+                  limitations: retryLimitations,
+                },
+                period,
+              ),
+              canonicalFilters,
+              period,
+              "Retry-session rate",
+              "Count payment sessions with more than one attempt, divide by all payment sessions in scope, then multiply by 100.",
+              "Zero-attempt NoAttempt sessions remain in the session denominator and are not treated as retry sessions.",
+              retryLimitations,
+              provenance,
+              comparedGroups,
+            ),
+          ];
+    const recoveredAmountText =
+      recoveredAmountEvidence.length === 0
+        ? "No recovered requested amount"
+        : `${evidenceAmountText(recoveredAmountEvidence)} in requested amount`;
+    const unrecoveredAmountText =
+      unrecoveredAmountEvidence.length === 0
+        ? "no unrecovered requested amount"
+        : `${evidenceAmountText(unrecoveredAmountEvidence)} in requested amount`;
     insights.push({
       insightId: `insight:${sanitizeIdPart(merchantId)}:retry-recovery`,
       merchantId,
       title: "Retries recovered some initially unsuccessful payment sessions",
       observation: `${recovered.length} of ${initiallyUnsuccessful.length} initially unsuccessful multi-attempt sessions (${displayPercentage(recoveryRate)}) later recorded a successful attempt.`,
-      businessImpact:
-        "Retry behavior is associated with recovered payments in the observed records, while the data does not show that retrying itself caused the recovery.",
-      evidence: [evidence],
+      businessImpact: `${recoveredAmountText} is associated with observed recovery, while ${unrecoveredAmountText} remained without a recorded success. These are observed associations, not proof that retrying caused recovery or a revenue forecast.`,
+      priority:
+        unrecovered.length > recovered.length ||
+        (peerBenchmark !== undefined &&
+          retryRate !== null &&
+          retryRate - peerBenchmark.retryRate >= 10)
+          ? "high"
+          : "medium",
+      evidence: [
+        evidence,
+        ...retryRateEvidence,
+        ...recoveredAmountEvidence,
+        ...unrecoveredAmountEvidence,
+      ],
       recommendations: [
         {
           recommendationId: `recommendation:${sanitizeIdPart(merchantId)}:monitor-retries`,
@@ -1503,7 +1784,12 @@ export const buildMerchantInsights = (
             "Preserve a clear retry path and monitor recovery by failure reason, terminal, issuer, and attempt number before testing any retry-policy change.",
           rationale:
             "Observed recoveries make retry journeys worth monitoring, but subgroup evidence is needed to determine where an intervention is appropriate.",
-          supportingEvidenceIds: [evidenceId],
+          supportingEvidenceIds: [
+            evidenceId,
+            ...retryRateEvidence.map((item) => item.evidenceId),
+            ...recoveredAmountEvidence.map((item) => item.evidenceId),
+            ...unrecoveredAmountEvidence.map((item) => item.evidenceId),
+          ],
           caveats: [
             "This is an observed association, not proof that retries caused successful outcomes.",
           ],
@@ -1513,7 +1799,74 @@ export const buildMerchantInsights = (
     });
   }
 
-  return insights;
+  const feeDeviation = relativeFeeDeviations(sessions, peerBenchmark)[0];
+  if (
+    feeDeviation !== undefined &&
+    peerBenchmark !== undefined &&
+    peerLabel !== undefined
+  ) {
+    const feeLimitations = unique([
+      ...insightLimitations,
+      ADJUSTED_FEE_DISCLOSURE.message,
+      "The ratio includes only successful sessions with a numeric transformed adjusted_fee value; excluded sessions do not enter either side of the ratio.",
+    ]);
+    const evidenceId = `evidence:${sanitizeIdPart(merchantId)}:relative-adjusted-fee-${sanitizeIdPart(feeDeviation.currency)}`;
+    const feeEvidence = makeEvidence(
+      evidenceId,
+      metric(
+        {
+          metricId: `relative-adjusted-fee-to-amount-ratio-${sanitizeIdPart(feeDeviation.currency)}`,
+          label: `Relative transformed adjusted-fee-to-amount ratio (${feeDeviation.currency})`,
+          definition:
+            "Sum of confidentially transformed adjusted_fee divided by the corresponding successful payment amounts; valid only for relative comparison.",
+          value: feeDeviation.value,
+          unit: "percent",
+          analysisUnit: "payment_session",
+          sampleSize: feeDeviation.sampleSize,
+          comparison: peerComparison(
+            feeDeviation.value,
+            feeDeviation.peerValue,
+            `Median of ${feeDeviation.peerCount} same-category peer merchants with usable ${feeDeviation.currency} pairs`,
+          ),
+          disclosure: ADJUSTED_FEE_DISCLOSURE,
+          limitations: feeLimitations,
+        },
+        period,
+      ),
+      canonicalFilters,
+      period,
+      "Relative transformed adjusted-fee-to-amount ratio",
+      "For successful sessions with numeric adjusted_fee, divide the sum of transformed adjusted_fee by the sum of corresponding payment amounts, then multiply by 100; compare equal-merchant ratios using their median.",
+      "Sessions without a numeric transformed adjusted_fee or a corresponding successful amount are excluded from both numerator and denominator; no value is imputed.",
+      feeLimitations,
+      provenance,
+      comparedGroups,
+    );
+    insights.push({
+      insightId: `insight:${sanitizeIdPart(merchantId)}:relative-adjusted-fee-${sanitizeIdPart(feeDeviation.currency)}`,
+      merchantId,
+      title: "Relative transformed fee ratio differs from same-category peers",
+      observation: `The transformed adjusted-fee-to-amount ratio is ${displayPercentage(feeDeviation.value)}, ${Math.abs(feeDeviation.delta).toFixed(1)} percentage points ${feeDeviation.delta > 0 ? "above" : "below"} the equal-merchant same-category peer median of ${displayPercentage(feeDeviation.peerValue)} for ${feeDeviation.currency}.`,
+      businessImpact:
+        "This deviation is a relative operational review signal only. The transformed field cannot support an estimate of Zarinpal's real fee, pricing, merchant cost, or revenue impact.",
+      priority: Math.abs(feeDeviation.delta) >= 2 ? "medium" : "low",
+      evidence: [feeEvidence],
+      recommendations: [
+        {
+          recommendationId: `recommendation:${sanitizeIdPart(merchantId)}:review-relative-adjusted-fee`,
+          action:
+            "Validate transformed adjusted_fee coverage, then compare the relative ratio by time, terminal, and amount band before deciding whether an operational investigation is warranted.",
+          rationale:
+            "The same-category median limits concentration bias, but subgroup checks are needed to identify whether the deviation is stable or compositional.",
+          supportingEvidenceIds: [evidenceId],
+          caveats: [ADJUSTED_FEE_DISCLOSURE.message],
+        },
+      ],
+      limitations: feeLimitations,
+    });
+  }
+
+  return rankInsights(insights);
 };
 
 const dayInTimezone = (dateTime: string, timezone: string): string => {

@@ -82,19 +82,6 @@ const safeIntegerSum = (values: Iterable<number>, path: string): number => {
   return total;
 };
 
-const stableMean = (values: readonly number[], path: string): number => {
-  let mean = 0;
-  values.forEach((value, index) => {
-    mean += (value - mean) / (index + 1);
-  });
-  if (!Number.isFinite(mean)) {
-    throw new DomainValidationError("Unsafe analytical aggregate", [
-      { path, message: "must produce a finite mean" },
-    ]);
-  }
-  return mean;
-};
-
 const displayPercentage = (value: number | null): string =>
   value === null ? "unavailable" : `${round(value, 1).toFixed(1)}%`;
 
@@ -698,6 +685,31 @@ const successfulAttempt = (
 ): PaymentAttempt | undefined =>
   session.attempts.find((attempt) => attempt.status === "succeeded");
 
+const relativeAdjustedFeeRatio = (
+  sessions: readonly PaymentSession[],
+  path: string,
+): { value: number | null; sampleSize: number } => {
+  const pairs = sessions.flatMap((session) => {
+    const attempt = successfulAttempt(session);
+    return attempt !== undefined && typeof attempt.adjustedFee === "number"
+      ? [{ amount: attempt.amount, adjustedFee: attempt.adjustedFee }]
+      : [];
+  });
+  return {
+    value: percentage(
+      safeIntegerSum(
+        pairs.map((pair) => pair.adjustedFee),
+        `${path}.adjustedFee`,
+      ),
+      safeIntegerSum(
+        pairs.map((pair) => pair.amount),
+        `${path}.amount`,
+      ),
+    ),
+    sampleSize: pairs.length,
+  };
+};
+
 const countAvailableInsights = (
   sessions: readonly PaymentSession[],
 ): number => {
@@ -736,6 +748,10 @@ export const buildMerchantSummary = (
   const recoveredRetrySessions = initiallyUnsuccessfulRetrySessions.filter(
     (session) => session.outcome === "succeeded",
   );
+  const paymentAttemptCount = safeIntegerSum(
+    sessions.map((session) => session.attempts.length),
+    "headlineMetrics.payment-attempt-count",
+  );
   const limitations = [
     ...summaryLimitations(scoped, sessions),
     filterSemanticsLimitation(filters),
@@ -753,6 +769,20 @@ export const buildMerchantSummary = (
         analysisUnit: "payment_session",
         sampleSize: sessions.length,
         limitations: [SESSION_LIMITATION],
+      },
+      period,
+    ),
+    metric(
+      {
+        metricId: "successful-session-count",
+        label: "Successful payment sessions",
+        definition:
+          "Distinct payment sessions with at least one successful attempt.",
+        value: succeededSessionCount,
+        unit: "count",
+        analysisUnit: "payment_session",
+        sampleSize: sessions.length,
+        limitations: [SESSION_LIMITATION, DESCRIPTIVE_LIMITATION],
       },
       period,
     ),
@@ -800,6 +830,19 @@ export const buildMerchantSummary = (
     ),
     metric(
       {
+        metricId: "retry-session-count",
+        label: "Multi-attempt payment sessions",
+        definition: "Payment sessions containing more than one attempt.",
+        value: retrySessions.length,
+        unit: "count",
+        analysisUnit: "payment_session",
+        sampleSize: sessions.length,
+        limitations: [SESSION_LIMITATION, DESCRIPTIVE_LIMITATION],
+      },
+      period,
+    ),
+    metric(
+      {
         metricId: "retry-session-rate",
         label: "Multi-attempt payment-session rate",
         definition:
@@ -812,10 +855,45 @@ export const buildMerchantSummary = (
       },
       period,
     ),
+    metric(
+      {
+        metricId: "average-attempts-per-session",
+        label: "Average attempts per payment session",
+        definition:
+          "Observed payment-attempt count divided by all payment sessions in scope; NoAttempt sessions contribute zero attempts.",
+        value:
+          sessions.length === 0
+            ? null
+            : round(paymentAttemptCount / sessions.length),
+        unit: "attempts_per_session",
+        analysisUnit: "payment_session",
+        sampleSize: sessions.length,
+        limitations: [SESSION_LIMITATION, DESCRIPTIVE_LIMITATION],
+      },
+      period,
+    ),
   ];
 
   if (initiallyUnsuccessfulRetrySessions.length > 0) {
     headlineMetrics.push(
+      metric(
+        {
+          metricId: "observed-recovered-retry-session-count",
+          label: "Recovered retry sessions",
+          definition:
+            "Initially unsuccessful multi-attempt sessions that later recorded a successful attempt.",
+          value: recoveredRetrySessions.length,
+          unit: "count",
+          analysisUnit: "payment_session",
+          sampleSize: initiallyUnsuccessfulRetrySessions.length,
+          limitations: [
+            SESSION_LIMITATION,
+            DESCRIPTIVE_LIMITATION,
+            "Observed recovery does not establish that retrying caused success.",
+          ],
+        },
+        period,
+      ),
       metric(
         {
           metricId: "observed-retry-recovery-rate",
@@ -840,7 +918,7 @@ export const buildMerchantSummary = (
     );
   }
 
-  const currencies = unique(scoped.map((attempt) => attempt.currency)).sort();
+  const currencies = unique(sessions.map((session) => session.currency)).sort();
   for (const currency of currencies) {
     const currencySessions = sessions.filter(
       (session) => session.currency === currency,
@@ -848,7 +926,31 @@ export const buildMerchantSummary = (
     const successfulSessions = currencySessions.filter(
       (session) => session.outcome === "succeeded",
     );
+    const failedSessions = currencySessions.filter(
+      (session) => session.outcome === "failed",
+    );
     headlineMetrics.push(
+      metric(
+        {
+          metricId: `total-payment-volume-${sanitizeIdPart(currency)}`,
+          label: `Total observed payment volume (${currency})`,
+          definition:
+            "Source amount summed once per payment session regardless of outcome; this is observed requested volume, not successful or settled volume.",
+          value: safeIntegerSum(
+            currencySessions.map((session) => session.representativeAmount),
+            `headlineMetrics.total-payment-volume-${currency}`,
+          ),
+          unit: currency,
+          analysisUnit: "payment_session",
+          sampleSize: currencySessions.length,
+          disclosure: {
+            code: "NO_CURRENCY_CONVERSION",
+            message: `This amount includes only ${currency}; no currency conversion was applied.`,
+          },
+          limitations: [SESSION_LIMITATION, DESCRIPTIVE_LIMITATION],
+        },
+        period,
+      ),
       metric(
         {
           metricId: `successful-session-amount-${sanitizeIdPart(currency)}`,
@@ -870,28 +972,50 @@ export const buildMerchantSummary = (
         },
         period,
       ),
+      metric(
+        {
+          metricId: `failed-session-amount-${sanitizeIdPart(currency)}`,
+          label: `Failed payment-session amount (${currency})`,
+          definition:
+            "Source amount summed once per failed payment session, including failed NoAttempt sessions. Successful and pending sessions are excluded.",
+          value: safeIntegerSum(
+            failedSessions.map((session) => session.representativeAmount),
+            `headlineMetrics.failed-session-amount-${currency}`,
+          ),
+          unit: currency,
+          analysisUnit: "payment_session",
+          sampleSize: failedSessions.length,
+          disclosure: {
+            code: "NO_CURRENCY_CONVERSION",
+            message: `This amount includes only ${currency}; no currency conversion was applied.`,
+          },
+          limitations: [SESSION_LIMITATION, DESCRIPTIVE_LIMITATION],
+        },
+        period,
+      ),
     );
 
-    const feeValues = successfulSessions.flatMap((session) => {
-      const fee = successfulAttempt(session)?.adjustedFee;
-      return typeof fee === "number" ? [fee] : [];
-    });
-    if (feeValues.length > 0) {
+    const adjustedFeeRatio = relativeAdjustedFeeRatio(
+      successfulSessions,
+      `headlineMetrics.relative-adjusted-fee-${currency}`,
+    );
+    if (adjustedFeeRatio.sampleSize > 0) {
       headlineMetrics.push(
         metric(
           {
-            metricId: `average-adjusted-fee-${sanitizeIdPart(currency)}`,
-            label: `Average confidentially transformed adjusted fee (${currency})`,
+            metricId: `relative-adjusted-fee-to-amount-ratio-${sanitizeIdPart(currency)}`,
+            label: `Relative adjusted-fee-to-amount ratio (${currency})`,
             definition:
-              "Mean available adjusted_fee value across successful payment sessions, counted once per session.",
-            value: round(stableMean(feeValues, "headlineMetrics.adjustedFee")),
-            unit: `transformed_${currency}`,
+              "Sum of available confidentially transformed adjusted_fee values divided by the corresponding successful payment amounts.",
+            value: adjustedFeeRatio.value,
+            unit: "percent",
             analysisUnit: "payment_session",
-            sampleSize: feeValues.length,
+            sampleSize: adjustedFeeRatio.sampleSize,
             disclosure: ADJUSTED_FEE_DISCLOSURE,
             limitations: [
               ADJUSTED_FEE_DISCLOSURE.message,
               DESCRIPTIVE_LIMITATION,
+              "Only successful sessions with a non-null adjusted_fee are included; missing values are excluded from both numerator and denominator.",
             ],
           },
           period,
@@ -1116,6 +1240,11 @@ const dayInTimezone = (dateTime: string, timezone: string): string => {
   return `${year}-${month}-${day}`;
 };
 
+const statusMetricPrefix = (
+  status: "succeeded" | "failed",
+): "successful" | "failed" =>
+  status === "succeeded" ? "successful" : "failed";
+
 export const buildDailyTrends = (
   attempts: readonly PaymentAttempt[],
   merchantId: string,
@@ -1136,10 +1265,15 @@ export const buildDailyTrends = (
   const period = resolvePeriod(scoped, filters, provenance, sessions);
   const timezone = period.timezone;
   validateTimezone(timezone);
-  const attemptCounts = new Map<string, number>();
+  const attemptsByDay = new Map<string, PaymentAttempt[]>();
   for (const attempt of scoped) {
     const day = dayInTimezone(attempt.occurredAt, timezone);
-    attemptCounts.set(day, (attemptCounts.get(day) ?? 0) + 1);
+    const current = attemptsByDay.get(day);
+    if (current === undefined) {
+      attemptsByDay.set(day, [attempt]);
+    } else {
+      current.push(attempt);
+    }
   }
   const sessionsByDay = new Map<string, PaymentSession[]>();
   for (const session of sessions) {
@@ -1151,6 +1285,7 @@ export const buildDailyTrends = (
       current.push(session);
     }
   }
+  const attemptDays = [...attemptsByDay.keys()].sort();
   const sessionDays = [...sessionsByDay.keys()].sort();
   const commonLimitations = [
     DESCRIPTIVE_LIMITATION,
@@ -1165,17 +1300,109 @@ export const buildDailyTrends = (
     metricId: "payment-attempt-count",
     unit: "count",
     analysisUnit: "payment_attempt",
-    points: [...attemptCounts.keys()]
-      .sort()
-      .map((day) => ({ x: day, y: attemptCounts.get(day) ?? 0 })),
+    points: attemptDays.map((day) => ({
+      x: day,
+      y: attemptsByDay.get(day)?.length ?? 0,
+    })),
     limitations: commonLimitations,
   };
 
   if (filters.analysisUnit === "payment_attempt") {
-    return [attemptSeries];
+    const attemptStatusSeries = (
+      status: "succeeded" | "failed",
+    ): ChartSeries => ({
+      seriesId: `daily-${statusMetricPrefix(status)}-payment-attempts:${sanitizeIdPart(merchantId)}`,
+      label: `Daily ${statusMetricPrefix(status)} payment attempts`,
+      metricId: `${statusMetricPrefix(status)}-payment-attempt-count`,
+      unit: "count",
+      analysisUnit: "payment_attempt",
+      points: attemptDays.map((day) => ({
+        x: day,
+        y:
+          attemptsByDay
+            .get(day)
+            ?.filter((attempt) => attempt.status === status).length ?? 0,
+      })),
+      limitations: commonLimitations,
+    });
+    const attemptRateSeries = (
+      status: "succeeded" | "failed",
+    ): ChartSeries => ({
+      seriesId: `daily-${statusMetricPrefix(status)}-payment-attempt-rate:${sanitizeIdPart(merchantId)}`,
+      label: `Daily ${statusMetricPrefix(status)} payment-attempt rate`,
+      metricId: `${statusMetricPrefix(status)}-payment-attempt-rate`,
+      unit: "percent",
+      analysisUnit: "payment_attempt",
+      points: attemptDays.map((day) => {
+        const dayAttempts = attemptsByDay.get(day) ?? [];
+        return {
+          x: day,
+          y: percentage(
+            dayAttempts.filter((attempt) => attempt.status === status).length,
+            dayAttempts.length,
+          ),
+        };
+      }),
+      limitations: [
+        ...commonLimitations,
+        "Pending attempts remain in rate denominators and are neither successful nor failed.",
+      ],
+    });
+    return [
+      attemptSeries,
+      attemptStatusSeries("succeeded"),
+      attemptStatusSeries("failed"),
+      attemptRateSeries("succeeded"),
+      attemptRateSeries("failed"),
+    ];
   }
 
-  return [
+  const sessionLimitations = [
+    SESSION_LIMITATION,
+    ...commonLimitations,
+    "Each payment session is assigned to its observation day: the first observed attempt day, or source creation day for a NoAttempt session.",
+  ];
+  const sessionStatusCountSeries = (
+    status: "succeeded" | "failed",
+  ): ChartSeries => ({
+    seriesId: `daily-${statusMetricPrefix(status)}-payment-sessions:${sanitizeIdPart(merchantId)}`,
+    label: `Daily ${statusMetricPrefix(status)} payment sessions`,
+    metricId: `${statusMetricPrefix(status)}-session-count`,
+    unit: "count",
+    analysisUnit: "payment_session",
+    points: sessionDays.map((day) => ({
+      x: day,
+      y:
+        sessionsByDay
+          .get(day)
+          ?.filter((session) => session.outcome === status).length ?? 0,
+    })),
+    limitations: sessionLimitations,
+  });
+  const sessionRateSeries = (
+    status: "succeeded" | "failed",
+  ): ChartSeries => ({
+    seriesId: `daily-${statusMetricPrefix(status)}-session-rate:${sanitizeIdPart(merchantId)}`,
+    label: `Daily ${statusMetricPrefix(status)} payment-session rate`,
+    metricId: `${statusMetricPrefix(status)}-session-rate`,
+    unit: "percent",
+    analysisUnit: "payment_session",
+    points: sessionDays.map((day) => {
+      const daySessions = sessionsByDay.get(day) ?? [];
+      return {
+        x: day,
+        y: percentage(
+          daySessions.filter((session) => session.outcome === status).length,
+          daySessions.length,
+        ),
+      };
+    }),
+    limitations: [
+      ...sessionLimitations,
+      "Pending sessions remain in rate denominators and are neither successful nor failed.",
+    ],
+  });
+  const sessionSeries: ChartSeries[] = [
     {
       seriesId: `daily-payment-sessions:${sanitizeIdPart(merchantId)}`,
       label: "Daily payment sessions",
@@ -1186,16 +1413,31 @@ export const buildDailyTrends = (
         x: day,
         y: sessionsByDay.get(day)?.length ?? 0,
       })),
-      limitations: [
-        SESSION_LIMITATION,
-        ...commonLimitations,
-        "Each payment session is assigned to its observation day: the first attempt day, or source creation day for a NoAttempt session.",
-      ],
+      limitations: sessionLimitations,
+    },
+    sessionStatusCountSeries("succeeded"),
+    sessionStatusCountSeries("failed"),
+    sessionRateSeries("succeeded"),
+    sessionRateSeries("failed"),
+    {
+      seriesId: `daily-retry-session-count:${sanitizeIdPart(merchantId)}`,
+      label: "Daily multi-attempt payment sessions",
+      metricId: "retry-session-count",
+      unit: "count",
+      analysisUnit: "payment_session",
+      points: sessionDays.map((day) => ({
+        x: day,
+        y:
+          sessionsByDay
+            .get(day)
+            ?.filter((session) => session.attempts.length > 1).length ?? 0,
+      })),
+      limitations: sessionLimitations,
     },
     {
-      seriesId: `daily-successful-session-rate:${sanitizeIdPart(merchantId)}`,
-      label: "Daily successful payment-session rate",
-      metricId: "successful-session-rate",
+      seriesId: `daily-retry-session-rate:${sanitizeIdPart(merchantId)}`,
+      label: "Daily multi-attempt payment-session rate",
+      metricId: "retry-session-rate",
       unit: "percent",
       analysisUnit: "payment_session",
       points: sessionDays.map((day) => {
@@ -1203,19 +1445,99 @@ export const buildDailyTrends = (
         return {
           x: day,
           y: percentage(
-            daySessions.filter((session) => session.outcome === "succeeded")
+            daySessions.filter((session) => session.attempts.length > 1)
               .length,
             daySessions.length,
           ),
         };
       }),
-      limitations: [
-        SESSION_LIMITATION,
-        ...commonLimitations,
-        "Each payment session is assigned to its observation day: the first attempt day, or source creation day for a NoAttempt session.",
-      ],
+      limitations: sessionLimitations,
     },
   ];
+
+  for (const currency of unique(
+    sessions.map((session) => session.currency),
+  ).sort()) {
+    const currencySessions = sessions.filter(
+      (session) => session.currency === currency,
+    );
+    sessionSeries.push(
+      {
+        seriesId: `daily-total-payment-volume-${sanitizeIdPart(currency)}:${sanitizeIdPart(merchantId)}`,
+        label: `Daily total observed payment volume (${currency})`,
+        metricId: `total-payment-volume-${sanitizeIdPart(currency)}`,
+        unit: currency,
+        analysisUnit: "payment_session",
+        points: sessionDays.map((day) => ({
+          x: day,
+          y: safeIntegerSum(
+            (sessionsByDay.get(day) ?? [])
+              .filter((session) => session.currency === currency)
+              .map((session) => session.representativeAmount),
+            `trends.${day}.total-payment-volume-${currency}`,
+          ),
+        })),
+        limitations: [
+          ...sessionLimitations,
+          "Amounts are summed once per session regardless of outcome and are not successful or settled volume.",
+        ],
+      },
+      {
+        seriesId: `daily-successful-payment-volume-${sanitizeIdPart(currency)}:${sanitizeIdPart(merchantId)}`,
+        label: `Daily successful payment volume (${currency})`,
+        metricId: `successful-session-amount-${sanitizeIdPart(currency)}`,
+        unit: currency,
+        analysisUnit: "payment_session",
+        points: sessionDays.map((day) => ({
+          x: day,
+          y: safeIntegerSum(
+            (sessionsByDay.get(day) ?? [])
+              .filter(
+                (session) =>
+                  session.currency === currency &&
+                  session.outcome === "succeeded",
+              )
+              .map((session) => session.representativeAmount),
+            `trends.${day}.successful-payment-volume-${currency}`,
+          ),
+        })),
+        limitations: [
+          ...sessionLimitations,
+          "Failed, reversed, pending, and NoAttempt sessions are excluded from successful volume.",
+        ],
+      },
+    );
+
+    const adjustedFeeRatio = relativeAdjustedFeeRatio(
+      currencySessions,
+      `trends.relative-adjusted-fee-${currency}`,
+    );
+    if (adjustedFeeRatio.sampleSize > 0) {
+      sessionSeries.push({
+        seriesId: `daily-relative-adjusted-fee-ratio-${sanitizeIdPart(currency)}:${sanitizeIdPart(merchantId)}`,
+        label: `Daily relative adjusted-fee-to-amount ratio (${currency})`,
+        metricId: `relative-adjusted-fee-to-amount-ratio-${sanitizeIdPart(currency)}`,
+        unit: "percent",
+        analysisUnit: "payment_session",
+        points: sessionDays.map((day) => ({
+          x: day,
+          y: relativeAdjustedFeeRatio(
+            (sessionsByDay.get(day) ?? []).filter(
+              (session) => session.currency === currency,
+            ),
+            `trends.${day}.relative-adjusted-fee-${currency}`,
+          ).value,
+        })),
+        limitations: [
+          ...sessionLimitations,
+          ADJUSTED_FEE_DISCLOSURE.message,
+          "Only successful sessions with a non-null adjusted_fee contribute; missing values produce null rather than zero.",
+        ],
+      });
+    }
+  }
+
+  return sessionSeries;
 };
 
 const median = (values: readonly number[]): number => {
@@ -1334,7 +1656,7 @@ export const buildMerchantSegments = (
     "These are descriptive median splits, not merchant scores, predictions, causal groups, or recommendations.",
     CONFOUNDING_LIMITATION,
     "Median thresholds depend on the selected merchant population and period; membership can change when filters change.",
-    "Segment rate metrics are session-weighted and can be influenced by merchants with more sessions; merchant concentration is not adjusted away.",
+    "Peer thresholds use equal-merchant medians so high-volume merchants do not dominate classification; segment-wide session-weighted rates can still reflect merchant concentration.",
     filterSemanticsLimitation(filters),
   ];
 

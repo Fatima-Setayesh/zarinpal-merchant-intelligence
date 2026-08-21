@@ -344,7 +344,7 @@ describe("merchant analytics", () => {
         attemptId: "tied-success",
         sessionId: "tied-session",
         merchantId: "m-tied",
-        occurredAt: "2026-01-01T00:00:00Z",
+        occurredAt: "2026-01-01T03:30:00+03:30",
         amount: 10,
         currency: "IRR",
         status: "succeeded",
@@ -362,6 +362,40 @@ describe("merchant analytics", () => {
     );
     expect(buildMerchantInsights(tied, "m-tied", {}, provenance)).toHaveLength(
       0,
+    );
+
+    const eligibleRetry = parsePaymentAttempts([
+      {
+        attemptId: "eligible-failure",
+        sessionId: "eligible-session",
+        merchantId: "m-tied",
+        occurredAt: "2026-01-02T00:00:00Z",
+        amount: 10,
+        currency: "IRR",
+        status: "failed",
+      },
+      {
+        attemptId: "eligible-success",
+        sessionId: "eligible-session",
+        merchantId: "m-tied",
+        occurredAt: "2026-01-02T00:01:00Z",
+        amount: 10,
+        currency: "IRR",
+        status: "succeeded",
+      },
+    ]);
+    const retryInsight = buildMerchantInsights(
+      [...tied, ...eligibleRetry],
+      "m-tied",
+      {},
+      provenance,
+    ).find((insight) => insight.insightId.endsWith("retry-recovery"));
+    expect(retryInsight?.observation).toContain("1 of 1");
+    expect(retryInsight?.limitations.join(" ")).toContain(
+      "1 multi-attempt payment sessions with tied earliest timestamps",
+    );
+    expect(retryInsight?.evidence[0]?.limitations.join(" ")).toContain(
+      "excluded",
     );
   });
 

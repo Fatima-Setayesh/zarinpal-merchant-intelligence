@@ -520,7 +520,8 @@ const sessionAmountInconsistencyCount = (
 
 const hasAmbiguousInitialAttemptOrder = (session: PaymentSession): boolean =>
   session.attempts.length > 1 &&
-  session.attempts[0]?.occurredAt === session.attempts[1]?.occurredAt;
+  Date.parse(session.attempts[0]?.occurredAt ?? "") ===
+    Date.parse(session.attempts[1]?.occurredAt ?? "");
 
 const isInitiallyUnsuccessfulRetry = (session: PaymentSession): boolean =>
   session.attempts.length > 1 &&
@@ -935,6 +936,17 @@ export const buildMerchantInsights = (
 
   const initiallyUnsuccessful = sessions.filter(isInitiallyUnsuccessfulRetry);
   if (initiallyUnsuccessful.length > 0) {
+    const ambiguousInitialOrder = sessions.filter(
+      hasAmbiguousInitialAttemptOrder,
+    ).length;
+    const retryLimitations = [
+      ...insightLimitations,
+      ...(ambiguousInitialOrder > 0
+        ? [
+            `${ambiguousInitialOrder} multi-attempt payment sessions with tied earliest timestamps are excluded because no source sequence is available.`,
+          ]
+        : []),
+    ];
     const recovered = initiallyUnsuccessful.filter(
       (session) => session.outcome === "succeeded",
     );
@@ -953,7 +965,7 @@ export const buildMerchantInsights = (
         unit: "percent",
         analysisUnit: "payment_session",
         sampleSize: initiallyUnsuccessful.length,
-        limitations: insightLimitations,
+        limitations: retryLimitations,
       },
       period,
     );
@@ -965,7 +977,7 @@ export const buildMerchantInsights = (
       "Observed retry recovery rate",
       "Among sessions with more than one attempt whose first attempt was not successful, count sessions with any later successful attempt, divide by all such sessions, then multiply by 100.",
       "Only validated attempt order and status are used. Missing operational failure reasons are not inferred.",
-      insightLimitations,
+      retryLimitations,
       provenance,
     );
     insights.push({
@@ -989,7 +1001,7 @@ export const buildMerchantInsights = (
           ],
         },
       ],
-      limitations: insightLimitations,
+      limitations: retryLimitations,
     });
   }
 

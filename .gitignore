@@ -25,3 +25,7 @@ pnpm-debug.log*
 .DS_Store
 Thumbs.db
 
+# Local agent tooling and visual review output
+.agents/
+artifacts/
+

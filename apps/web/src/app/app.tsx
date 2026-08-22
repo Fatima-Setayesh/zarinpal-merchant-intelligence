@@ -1,10 +1,5 @@
-import { AppShell } from "@/components/shared/app-shell";
-import { MerchantIntelligencePage } from "@/routes/merchant-intelligence-page";
+import { MerchantIntelligenceDashboard } from "@/features/merchant-intelligence/merchant-intelligence-dashboard";
 
 export function App() {
-  return (
-    <AppShell>
-      <MerchantIntelligencePage />
-    </AppShell>
-  );
+  return <MerchantIntelligenceDashboard />;
 }

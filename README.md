@@ -1,4 +1,19 @@
+<div align="center">
+
 # Zarinpal Merchant Intelligence
+
+### Payment evidence, translated into confident merchant decisions.
+
+[![React](https://img.shields.io/badge/React-19-20232a?style=for-the-badge&logo=react&logoColor=61DAFB)](https://react.dev/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Vite](https://img.shields.io/badge/Vite-7-646CFF?style=for-the-badge&logo=vite&logoColor=white)](https://vite.dev/)
+[![pnpm](https://img.shields.io/badge/pnpm-11-F69220?style=for-the-badge&logo=pnpm&logoColor=white)](https://pnpm.io/)
+
+![Merchant intelligence hero](docs/assets/readme-hero.png)
+
+**[Product vision](docs/product/product-vision.md) · [Architecture](docs/frontend/frontend-architecture.md) · [Roadmap](docs/product/roadmap.md) · [Specification](SPEC.md)**
+
+</div>
 
 A decision-intelligence product that turns validated payment evidence into merchant-facing observations, business impact, recommended actions, and traceability.
 
@@ -7,6 +22,8 @@ Payment data → Evidence → Insight → Business impact → Action → Traceab
 ```
 
 The browser is a presentation layer. Session construction, metrics, ranking, recommendations, segmentation, filtering semantics, and analytical prose come from the API; the UI validates and displays those outputs without recomputing or silently rewriting them.
+
+![Evidence to action product loop](docs/assets/decision-loop.svg)
 
 ## Current status
 
@@ -29,6 +46,20 @@ Still required before a production deployment:
 - final browser/device and assistive-technology acceptance testing against the deployment candidate.
 
 No production dataset or fabricated merchant output is bundled. Without `PAYMENTS_DATA_PATH`, the API reports a degraded state and data endpoints return `503 DATA_UNAVAILABLE`.
+
+## Product tour
+
+![Dashboard feature tour](docs/assets/product-tour.svg)
+
+| Experience              | What the merchant gets                                                                        |
+| ----------------------- | --------------------------------------------------------------------------------------------- |
+| **Decision brief**      | The current status, highest-priority problem, opportunity, and first action before any chart. |
+| **Merchant overview**   | Session-safe KPIs with explicit analytical units and direct evidence access.                  |
+| **Actionable insights** | Observation → evidence → business impact → recommended action → limitations.                  |
+| **Evidence story**      | One purposeful, keyboard-readable trend instead of decorative visualization.                  |
+| **Segment comparison**  | Merchant-friendly comparisons that keep sample context and caveats visible.                   |
+| **Traceability drawer** | Formula, scope, filters, period, sample size, missingness, provenance, and limitations.       |
+| **Advanced filters**    | Clear scope controls on desktop and a touch-friendly drawer on smaller screens.               |
 
 ## Product guardrails
 

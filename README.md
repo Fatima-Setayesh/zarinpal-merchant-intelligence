@@ -1,180 +1,170 @@
+<div align="center">
+
 # Zarinpal Merchant Intelligence
 
-A **Merchant Decision Intelligence Platform** for the Zarinpal Challenge. The product is designed to turn payment evidence into understandable business implications and recommended actions while keeping every important claim traceable.
+### Payment evidence, translated into confident merchant decisions.
 
-```text
-Raw Data
-   ↓
-Evidence
-   ↓
-Insight
-   ↓
-Business Impact
-   ↓
-Recommended Action
-   ↓
-Traceability
+[![React](https://img.shields.io/badge/React-19-20232a?style=for-the-badge&logo=react&logoColor=61DAFB)](https://react.dev/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Vite](https://img.shields.io/badge/Vite-7-646CFF?style=for-the-badge&logo=vite&logoColor=white)](https://vite.dev/)
+[![pnpm](https://img.shields.io/badge/pnpm-11-F69220?style=for-the-badge&logo=pnpm&logoColor=white)](https://pnpm.io/)
+
+![Merchant intelligence hero](docs/assets/readme-hero.png)
+
+**[Product vision](docs/product/product-vision.md) · [Architecture](docs/frontend/frontend-architecture.md) · [Roadmap](docs/product/roadmap.md) · [Specification](SPEC.md)**
+
+</div>
+
+> [!IMPORTANT]
+> The current interface is a frontend preview backed by clearly labelled illustrative fixtures. It does not present verified merchant analysis, calculate business metrics, or claim that `adjusted_fee` is Zarinpal's real fee.
+
+## The idea
+
+Payment data can explain what happened and still leave a merchant asking, “So what should I do?” This project closes that gap. It is a **decision-intelligence product**, not a wall of charts: every important finding moves from evidence to business meaning, a practical next step, and the context needed to verify the claim.
+
+![Evidence to action product loop](docs/assets/decision-loop.svg)
+
+## Product tour
+
+![Dashboard feature tour](docs/assets/product-tour.svg)
+
+| Experience              | What the merchant gets                                                                        |
+| ----------------------- | --------------------------------------------------------------------------------------------- |
+| **Decision brief**      | The current status, highest-priority problem, opportunity, and first action before any chart. |
+| **Merchant overview**   | Session-safe KPIs with explicit analytical units and direct evidence access.                  |
+| **Actionable insights** | Observation → evidence → business impact → recommended action → limitations.                  |
+| **Evidence story**      | One purposeful, keyboard-readable trend instead of decorative visualization.                  |
+| **Segment comparison**  | Merchant-friendly comparisons that keep sample context and caveats visible.                   |
+| **Traceability drawer** | Formula, scope, filters, period, sample size, missingness, provenance, and limitations.       |
+| **Advanced filters**    | Clear scope controls on desktop and a touch-friendly sheet on smaller screens.                |
+
+## What is implemented
+
+- Responsive React dashboard with desktop, tablet, and mobile layouts
+- Decision-first brief, metric overview, insight feed, trend visualization, and segment comparison
+- Advanced merchant, category, date, status, attempt, amount, terminal, and issuer filters
+- Evidence and traceability drawer with progressive disclosure
+- Loading, empty, error, unavailable, and stale-data presentation states
+- Accessible semantics, keyboard interaction, focus treatment, touch-safe controls, and reduced-motion support
+- Strict TypeScript, ESLint, Prettier, Vitest, Testing Library, and a production build pipeline
+- TanStack Query boundary ready for an approved analytics API
+
+The analytical engine, dataset pipeline, backend, storage, and production API are intentionally outside this frontend-owned repository phase. Proposed integration shapes remain marked **DRAFT — REQUIRES TEAMMATE APPROVAL**.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    A[Approved analytics API] -->|validated view model| Q[TanStack Query boundary]
+    Q --> D[Decision dashboard]
+    D --> O[Overview]
+    D --> I[Actionable insights]
+    D --> V[Evidence visualization]
+    O --> T[Traceability]
+    I --> T
+    V --> T
+    T --> C[Scope · formula · sample · limitations]
+
+    classDef external fill:#f7f2ff,stroke:#7251d6,color:#241d45
+    classDef ui fill:#fff8e8,stroke:#c8922e,color:#3e2d12
+    class A,Q external
+    class D,O,I,V,T,C ui
 ```
 
-This is not a generic analytics dashboard. A chart only belongs in the product when it helps a merchant understand or act on validated evidence.
+### Frontend stack
 
-## Current status
+| Layer        | Choice                                       | Why it is here                                   |
+| ------------ | -------------------------------------------- | ------------------------------------------------ |
+| UI           | React 19 + strict TypeScript                 | Predictable components and explicit contracts    |
+| Build        | Vite 7                                       | Fast local feedback and production bundling      |
+| Styling      | Tailwind CSS 4                               | Semantic tokens and responsive composition       |
+| Components   | shadcn/ui-compatible source primitives       | Accessible, owned UI building blocks             |
+| Server state | TanStack Query 5                             | A clean future API boundary                      |
+| Quality      | Vitest + Testing Library + ESLint + Prettier | Behaviour, accessibility, types, and consistency |
 
-### Implemented
+## Quick start
 
-- Project governance through `SPEC.md` and `AGENTS.md`
-- Product, judging, frontend, integration, responsive, and workflow documentation
-- A pnpm workspace with one React frontend in `apps/web`
-- Vite, strict TypeScript, Tailwind CSS, shadcn/ui-compatible tokens/components, and TanStack Query foundations
-- A responsive, accessible application shell and clearly labeled `Demo / Placeholder` state
-- ESLint, Prettier, Vitest, Testing Library, type-check, and production-build scripts
-- An ownership-only `apps/api/README.md`; it contains no backend implementation
+### Prerequisites
 
-### Planned
-
-- Teammate-owned dataset engineering, analytical definitions, backend, and data-serving APIs
-- Merchant overview and actionable insight experiences
-- Teammate-validated evidence, metrics, filters, comparisons, and segment data
-- Traceability drawers or evidence panels backed by approved contracts
-- Purposeful visualizations, advanced filters, mobile optimization, and demo polish
-- Advanced and bonus work documented in the [product roadmap](docs/product/roadmap.md)
-
-No data pipeline, backend, database, analytical calculation, merchant metric, or generated insight is implemented in this foundation.
-
-## Challenge priorities
-
-The 300-point judging model drives the product architecture:
-
-| Dimension                      | Points | Product response                                                          |
-| ------------------------------ | -----: | ------------------------------------------------------------------------- |
-| Actionability and Novelty      |     90 | Pair a concrete, validated number with a business implication and action. |
-| Accuracy and Traceability      |     75 | Expose methodology, scope, sample, missingness, and limitations.          |
-| Analytical Depth               |     60 | Reserve rigorous analysis for the teammate-owned analytical layer.        |
-| UX for Non-Technical Merchants |     45 | Explain what happened, why it matters, and what to do next first.         |
-| Technical Quality              |     30 | Keep setup reproducible, code maintainable, and ownership explicit.       |
-
-See [`SPEC.md`](SPEC.md) for the complete requirements and definition of done.
-
-## Architecture and stack
-
-The repository uses a deliberately small pnpm workspace. It leaves room for teammate-owned backend work without choosing that architecture on their behalf.
-
-- React 19 for the UI
-- Vite for local development and production bundling
-- Strict TypeScript for application and configuration code
-- Tailwind CSS v4 for semantic, responsive styling
-- shadcn/ui-compatible source components and CSS-variable design tokens
-- TanStack Query for the future server-state boundary
-- ESLint and Prettier for static quality and formatting
-- Vitest, Testing Library, and jsdom for frontend tests
-
-React Router is intentionally absent because the current shell has one meaningful page. No general-purpose client state library, charting library, AI SDK, or backend dependency has been added.
-
-## Repository structure
-
-```text
-.
-├── AGENTS.md
-├── SPEC.md
-├── README.md
-├── apps/
-│   ├── api/
-│   │   └── README.md
-│   └── web/
-│       ├── src/
-│       │   ├── app/
-│       │   ├── components/
-│       │   │   ├── shared/
-│       │   │   └── ui/
-│       │   ├── lib/
-│       │   ├── routes/
-│       │   ├── styles/
-│       │   └── test/
-│       └── components.json
-└── docs/
-    ├── frontend/
-    ├── integration/
-    ├── product/
-    └── workflow/
-```
-
-Only useful files are present; empty feature directories are deferred until real implementation work begins.
-
-## Setup
-
-Prerequisites:
-
-- Node.js 22 or newer
-- pnpm 11 or newer
-
-Install and start the frontend:
+- Node.js 22+
+- pnpm 11+
 
 ```bash
+git clone https://github.com/Fatima-Setayesh/zarinpal-merchant-intelligence.git
+cd zarinpal-merchant-intelligence
 pnpm install
 pnpm dev
 ```
 
-On Windows systems that block PowerShell script shims, use `pnpm.cmd` in the same commands.
+On Windows systems that block PowerShell shims, use `pnpm.cmd` in the same commands.
 
-The Vite development server prints its local URL after startup.
+### Quality commands
 
-## Scripts
-
-| Command             | Purpose                                                     |
-| ------------------- | ----------------------------------------------------------- |
-| `pnpm dev`          | Run the web development server.                             |
-| `pnpm format`       | Format supported repository files.                          |
-| `pnpm format:check` | Verify formatting without writing.                          |
-| `pnpm lint`         | Run frontend ESLint checks.                                 |
-| `pnpm typecheck`    | Run strict TypeScript checks.                               |
-| `pnpm test`         | Run frontend tests once.                                    |
-| `pnpm build`        | Type-check and create the production bundle.                |
-| `pnpm check`        | Run format, lint, type-check, tests, and build in sequence. |
-
-## Team ownership
-
-### Fatima
-
-Owns project governance, product documentation, frontend architecture and implementation, UI/UX, responsive and accessible behavior, design system, data storytelling, visualization presentation, traceability UX, frontend tests, and frontend API integration.
-
-### Teammate
-
-Owns dataset engineering and cleaning, Payment Session versus Payment Attempt modeling, analytical calculations and statistics, hypothesis testing, segmentation and confounder control, insight generation, backend and APIs, database/storage choices, numerical tests, and backend performance.
-
-Draft contracts describe what the frontend needs; they do not define or implement teammate-owned analytical behavior.
+| Command             | Purpose                                     |
+| ------------------- | ------------------------------------------- |
+| `pnpm dev`          | Start the Vite development server           |
+| `pnpm lint`         | Run ESLint with zero warnings allowed       |
+| `pnpm typecheck`    | Verify strict TypeScript contracts          |
+| `pnpm test`         | Run the frontend test suite once            |
+| `pnpm build`        | Type-check and create the production bundle |
+| `pnpm format:check` | Check repository formatting                 |
+| `pnpm check`        | Run every quality gate in sequence          |
 
 ## Correctness guardrails
 
-- A **Payment Session** and a **Payment Attempt** are distinct analytical units. Future integrations must avoid accidental double counting.
-- `adjusted_fee` is **not Zarinpal's real fee**. A confidential constant transformation has been applied, so absolute real-pricing claims are prohibited. Relative comparisons are only suitable when analytically justified.
-- Missingness, merchant concentration, and potential confounders must be handled in the teammate-owned analysis and disclosed in the frontend.
-- Every important number or claim must eventually expose its subset, filters, date range, sample size, formula, compared groups, missing-data handling, and limitations.
+```text
+Payment Session != Payment Attempt
+adjusted_fee      != Zarinpal's real fee
+demo fixture      != verified merchant analysis
+association       != causation
+```
 
-## Development workflow
+- Important claims must expose subset, filters, date range, sample size, formula, comparison groups, missing-data handling, and limitations.
+- The frontend formats and explains backend-approved values; it does not calculate analytical results.
+- A filter change must never leave stale claims looking current.
+- Confidentially transformed fees may only support analytically justified relative comparisons.
 
-- `main` is stable and demo-ready.
-- `integration` is the combined frontend/backend integration branch.
-- Focused feature branches merge into `integration`; validated integration later merges into `main`.
+## Repository map
 
-Read the [Git workflow](docs/workflow/git-workflow.md) before branching. Agents must also read [`AGENTS.md`](AGENTS.md) before changing the repository.
+```text
+.
+├── apps/
+│   ├── web/                    # React application
+│   │   └── src/
+│   │       ├── app/            # Providers and application root
+│   │       ├── components/     # Shared shell and UI primitives
+│   │       ├── features/       # Dashboard, filters, insights, evidence
+│   │       ├── routes/         # Merchant intelligence page
+│   │       └── styles/         # Tokens and responsive behaviour
+│   └── api/README.md           # Ownership-only backend placeholder
+├── docs/
+│   ├── frontend/               # UX, design system, architecture
+│   ├── integration/            # Boundaries and draft contracts
+│   ├── product/                # Vision, rubric, principles, roadmap
+│   └── workflow/               # Team Git workflow
+├── AGENTS.md                   # Repository operating contract
+└── SPEC.md                     # Canonical product specification
+```
 
-## Documentation map
+## Documentation
 
-- [Product specification](SPEC.md)
-- [Product vision](docs/product/product-vision.md)
-- [Judging rubric](docs/product/judging-rubric.md)
-- [Insight principles](docs/product/insight-principles.md)
-- [Product roadmap](docs/product/roadmap.md)
-- [Frontend architecture](docs/frontend/frontend-architecture.md)
-- [Design system](docs/frontend/design-system.md)
-- [UX principles](docs/frontend/ux-principles.md)
-- [Traceability UX](docs/frontend/traceability-ux.md)
-- [Responsive strategy](docs/frontend/responsive-strategy.md)
-- [Demo checklist](docs/frontend/demo-checklist.md)
-- [Frontend/backend boundaries](docs/integration/frontend-backend-boundaries.md)
-- [Draft contracts](docs/integration/draft-contracts.md)
-- [Git workflow](docs/workflow/git-workflow.md)
+| Product                                                  | Frontend                                                        | Integration                                                                    |
+| -------------------------------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| [Product vision](docs/product/product-vision.md)         | [Frontend architecture](docs/frontend/frontend-architecture.md) | [Frontend/backend boundaries](docs/integration/frontend-backend-boundaries.md) |
+| [Judging rubric](docs/product/judging-rubric.md)         | [Design system](docs/frontend/design-system.md)                 | [Draft contracts](docs/integration/draft-contracts.md)                         |
+| [Insight principles](docs/product/insight-principles.md) | [Traceability UX](docs/frontend/traceability-ux.md)             | [Git workflow](docs/workflow/git-workflow.md)                                  |
+| [Roadmap](docs/product/roadmap.md)                       | [Responsive strategy](docs/frontend/responsive-strategy.md)     | [Demo checklist](docs/frontend/demo-checklist.md)                              |
 
-## Roadmap
+## Delivery boundary
 
-The roadmap preserves foundation, data and analytical work, backend integration, merchant experiences, traceability, segmentation, advanced analysis, filters, mobile optimization, performance, correctness, demo preparation, bonus capabilities, and final UX polish. Ownership and exit gates are documented in the [roadmap](docs/product/roadmap.md).
+The repository deliberately separates presentation from analytical correctness. Fatima owns the frontend, UX, data storytelling, accessibility, traceability experience, and frontend integration. The teammate-owned analytical layer owns cleaning, session modelling, calculations, statistics, segmentation, backend APIs, storage, and numerical verification.
+
+That boundary is a feature: it keeps every merchant-facing claim explainable without smuggling analytics into UI code.
+
+---
+
+<div align="center">
+
+Built for the **Zarinpal Challenge** with one rule: **make the next decision clearer than the last chart.**
+
+</div>

@@ -262,8 +262,7 @@ describe("merchant analytics", () => {
       metricById(summary.headlineMetrics, "retry-session-count").value,
     ).toBe(1);
     expect(
-      metricById(summary.headlineMetrics, "average-attempts-per-session")
-        .value,
+      metricById(summary.headlineMetrics, "average-attempts-per-session").value,
     ).toBeCloseTo(1.3333, 4);
     expect(
       metricById(
@@ -402,26 +401,19 @@ describe("merchant analytics", () => {
       metricById(summary.headlineMetrics, "failed-session-amount-IRR").value,
     ).toBe(700);
     expect(
-      metricById(summary.headlineMetrics, "average-attempts-per-session")
+      metricById(summary.headlineMetrics, "average-attempts-per-session").value,
+    ).toBe(1);
+    expect(
+      metricById(zeroAttemptSummary.headlineMetrics, "payment-session-count")
         .value,
     ).toBe(1);
     expect(
-      metricById(
-        zeroAttemptSummary.headlineMetrics,
-        "payment-session-count",
-      ).value,
-    ).toBe(1);
-    expect(
-      metricById(
-        zeroAttemptSummary.headlineMetrics,
-        "failed-session-rate",
-      ).value,
+      metricById(zeroAttemptSummary.headlineMetrics, "failed-session-rate")
+        .value,
     ).toBe(100);
     expect(
-      metricById(
-        zeroAttemptSummary.headlineMetrics,
-        "total-payment-volume-IRR",
-      ).value,
+      metricById(zeroAttemptSummary.headlineMetrics, "total-payment-volume-IRR")
+        .value,
     ).toBe(400);
     expect(
       metricById(
@@ -590,8 +582,7 @@ describe("merchant analytics", () => {
       metricById(summary.headlineMetrics, "payment-session-count").comparison,
     ).toMatchObject({ referenceValue: 2, delta: 0 });
     expect(
-      metricById(summary.headlineMetrics, "successful-session-rate")
-        .comparison,
+      metricById(summary.headlineMetrics, "successful-session-rate").comparison,
     ).toMatchObject({ referenceValue: 50, delta: 0 });
     expect(
       metricById(summary.headlineMetrics, "total-payment-volume-IRR")
@@ -616,8 +607,8 @@ describe("merchant analytics", () => {
       method: expect.stringContaining("Equal-merchant median"),
     });
     expect(
-      metricById(summary.headlineMetrics, "payment-session-count")
-        .traceability?.referencePopulation?.sampleSize,
+      metricById(summary.headlineMetrics, "payment-session-count").traceability
+        ?.referencePopulation?.sampleSize,
     ).toBe(3);
   });
 
@@ -839,8 +830,7 @@ describe("merchant analytics", () => {
       (item) => item.metricId === "successful-session-amount-IRR",
     );
     const adjustedFeeRatioSeries = series.find(
-      (item) =>
-        item.metricId === "relative-adjusted-fee-to-amount-ratio-IRR",
+      (item) => item.metricId === "relative-adjusted-fee-to-amount-ratio-IRR",
     );
 
     expect(
@@ -878,9 +868,9 @@ describe("merchant analytics", () => {
       unit: "payment_session",
       description: expect.stringContaining("point's sampleSize"),
     });
-    expect(adjustedFeeRatioSeries?.traceability?.assumptions.join(" ")).toContain(
-      "not Zarinpal's real fee",
-    );
+    expect(
+      adjustedFeeRatioSeries?.traceability?.assumptions.join(" "),
+    ).toContain("not Zarinpal's real fee");
     expect(sessionSeries?.limitations.join(" ")).toContain(
       "first observed attempt",
     );
@@ -1113,9 +1103,7 @@ describe("descriptive merchant segments", () => {
       .find((metric) =>
         metric.metricId.includes("relative-adjusted-fee-to-amount-ratio"),
       );
-    expect(feeMetric?.disclosure?.message).toContain(
-      "not Zarinpal's real fee",
-    );
+    expect(feeMetric?.disclosure?.message).toContain("not Zarinpal's real fee");
     expect(
       segments.every((segment) =>
         segment.metrics.every(

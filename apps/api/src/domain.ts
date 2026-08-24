@@ -3,10 +3,7 @@ export type AnalysisUnit = "payment_session" | "payment_attempt";
 export type PaymentAttemptStatus = "succeeded" | "failed" | "pending";
 
 export type ChallengeSessionStatus =
-  | "Failed"
-  | "Verified"
-  | "Paid"
-  | "Reversed";
+  "Failed" | "Verified" | "Paid" | "Reversed";
 export type ChallengeAttemptStatus =
   "Failed" | "InBank" | "Verified" | "NoAttempt" | "Paid" | "Reversed";
 
@@ -1284,7 +1281,8 @@ export const buildPaymentSessions = (
   }
 
   return sessions.sort((left, right) => {
-    const timeDelta = Date.parse(left.observedAt) - Date.parse(right.observedAt);
+    const timeDelta =
+      Date.parse(left.observedAt) - Date.parse(right.observedAt);
     return timeDelta !== 0
       ? timeDelta
       : left.sessionId.localeCompare(right.sessionId);

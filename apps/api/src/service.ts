@@ -1067,12 +1067,10 @@ class DefaultMerchantIntelligenceService implements MerchantIntelligenceService 
         issuers: issuerOptions
           .slice(0, MAX_FILTER_OPTIONS)
           .map((value) => ({ value, label: value })),
-        amountRange: numericRange(
-          [
-            ...snapshot.attempts.map((attempt) => attempt.amount),
-            ...sessions.map((session) => session.representativeAmount),
-          ],
-        ),
+        amountRange: numericRange([
+          ...snapshot.attempts.map((attempt) => attempt.amount),
+          ...sessions.map((session) => session.representativeAmount),
+        ]),
         attemptCountRange: numericRange(attemptsBySession.values()),
         analysisUnits: [
           {

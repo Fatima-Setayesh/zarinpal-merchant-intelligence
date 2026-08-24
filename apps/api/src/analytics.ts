@@ -452,8 +452,9 @@ export const applyPaymentAttemptFilters = (
   const fullSessions = buildPaymentSessions(validatedAttempts);
   if ((filters.analysisUnit ?? "payment_session") === "payment_session") {
     const selectedSessionIds = new Set(
-      filterPaymentSessions(fullSessions, filters)
-        .map((session) => session.sessionId),
+      filterPaymentSessions(fullSessions, filters).map(
+        (session) => session.sessionId,
+      ),
     );
     return validatedAttempts.filter((attempt) =>
       selectedSessionIds.has(attempt.sessionId),
@@ -596,10 +597,7 @@ const metricSourceIds = (metricId: string): string[] => {
     normalized === "successful-payment-attempt-rate" ||
     normalized === "failed-payment-attempt-rate"
   ) {
-    return [
-      normalized.replace("-rate", "-count"),
-      "payment-attempt-count",
-    ];
+    return [normalized.replace("-rate", "-count"), "payment-attempt-count"];
   }
   if (normalized.includes("payment-attempt-count")) {
     return ["payment-attempt-records"];
@@ -635,7 +633,10 @@ const metricSourceIds = (metricId: string): string[] => {
     return ["payment-session-count", "payment-session-representative-amount"];
   }
   if (normalized.startsWith("successful-session-amount-")) {
-    return ["successful-session-count", "payment-session-representative-amount"];
+    return [
+      "successful-session-count",
+      "payment-session-representative-amount",
+    ];
   }
   if (
     normalized.startsWith("failed-session-amount-") ||
@@ -657,9 +658,9 @@ const metricSourceIds = (metricId: string): string[] => {
 
 const traceDenominator = (
   item: Metric,
-): NonNullable<
-  NonNullable<Metric["traceability"]>["sample"]["denominator"]
-> | undefined => {
+):
+  | NonNullable<NonNullable<Metric["traceability"]>["sample"]["denominator"]>
+  | undefined => {
   if (item.metricId.includes("relative-adjusted-fee-to-amount-ratio-")) {
     return {
       unit: "corresponding_payment_amount",
@@ -917,10 +918,7 @@ interface PeerBenchmark {
   failureRate: number;
   retryRate: number;
   volumeByCurrency: Map<string, { value: number; peerCount: number }>;
-  adjustedFeeRatioByCurrency: Map<
-    string,
-    { value: number; peerCount: number }
-  >;
+  adjustedFeeRatioByCurrency: Map<string, { value: number; peerCount: number }>;
 }
 
 const addSafeMapValue = (
@@ -977,7 +975,10 @@ const buildMerchantPeerObservations = (
       `peers.${session.merchantId}.volume.${session.currency}`,
     );
     const successful = successfulAttempt(session);
-    if (successful !== undefined && typeof successful.adjustedFee === "number") {
+    if (
+      successful !== undefined &&
+      typeof successful.adjustedFee === "number"
+    ) {
       addSafeMapValue(
         observation.adjustedFeeByCurrency,
         session.currency,
@@ -1122,7 +1123,10 @@ const relativeFeeDeviations = (
     return [];
   }
   const deviations: RelativeFeeDeviation[] = [];
-  for (const [currency, peerRatio] of peerBenchmark.adjustedFeeRatioByCurrency) {
+  for (const [
+    currency,
+    peerRatio,
+  ] of peerBenchmark.adjustedFeeRatioByCurrency) {
     const target = relativeAdjustedFeeRatio(
       sessions.filter((session) => session.currency === currency),
       `insights.relative-adjusted-fee-${currency}`,
@@ -1156,7 +1160,8 @@ const countAvailableInsights = (
 ): number => {
   const failed = sessions.some((session) => session.outcome === "failed");
   const initiallyUnsuccessful = sessions.some(isInitiallyUnsuccessfulRetry);
-  const feeDeviation = relativeFeeDeviations(sessions, peerBenchmark).length > 0;
+  const feeDeviation =
+    relativeFeeDeviations(sessions, peerBenchmark).length > 0;
   return Number(failed) + Number(initiallyUnsuccessful) + Number(feeDeviation);
 };
 
@@ -1532,7 +1537,8 @@ export const buildMerchantSummary = (
             analysisUnit: "payment_session",
             sampleSize: adjustedFeeRatio.sampleSize,
             disclosure: ADJUSTED_FEE_DISCLOSURE,
-            ...(peerAdjustedFeeRatio === undefined || peerBenchmark === undefined
+            ...(peerAdjustedFeeRatio === undefined ||
+            peerBenchmark === undefined
               ? {}
               : {
                   comparison: peerComparison(
@@ -2164,12 +2170,7 @@ export const buildDailyTrends = (
   const sessions =
     filters.analysisUnit === "payment_attempt"
       ? []
-      : scopeMerchantSessions(
-          attempts,
-          merchantId,
-          filters,
-          sourceSessions,
-        );
+      : scopeMerchantSessions(attempts, merchantId, filters, sourceSessions);
   const period = resolvePeriod(scoped, filters, provenance, sessions);
   const timezone = period.timezone;
   validateTimezone(timezone);
@@ -2228,9 +2229,8 @@ export const buildDailyTrends = (
       points: attemptDays.map((day) => ({
         x: day,
         y:
-          attemptsByDay
-            .get(day)
-            ?.filter((attempt) => attempt.status === status).length ?? 0,
+          attemptsByDay.get(day)?.filter((attempt) => attempt.status === status)
+            .length ?? 0,
         sampleSize: attemptsByDay.get(day)?.length ?? 0,
       })),
       limitations: commonLimitations,
@@ -2266,7 +2266,13 @@ export const buildDailyTrends = (
       attemptRateSeries("succeeded"),
       attemptRateSeries("failed"),
     ].map((series) =>
-      traceDailySeries(series, evidenceFilters(filters, merchantId), provenance, period, scoped.length),
+      traceDailySeries(
+        series,
+        evidenceFilters(filters, merchantId),
+        provenance,
+        period,
+        scoped.length,
+      ),
     );
   }
 
@@ -2286,16 +2292,13 @@ export const buildDailyTrends = (
     points: sessionDays.map((day) => ({
       x: day,
       y:
-        sessionsByDay
-          .get(day)
-          ?.filter((session) => session.outcome === status).length ?? 0,
+        sessionsByDay.get(day)?.filter((session) => session.outcome === status)
+          .length ?? 0,
       sampleSize: sessionsByDay.get(day)?.length ?? 0,
     })),
     limitations: sessionLimitations,
   });
-  const sessionRateSeries = (
-    status: "succeeded" | "failed",
-  ): ChartSeries => ({
+  const sessionRateSeries = (status: "succeeded" | "failed"): ChartSeries => ({
     seriesId: `daily-${statusMetricPrefix(status)}-session-rate:${sanitizeIdPart(merchantId)}`,
     label: `Daily ${statusMetricPrefix(status)} payment-session rate`,
     metricId: `${statusMetricPrefix(status)}-session-rate`,
@@ -2362,8 +2365,7 @@ export const buildDailyTrends = (
         return {
           x: day,
           y: percentage(
-            daySessions.filter((session) => session.attempts.length > 1)
-              .length,
+            daySessions.filter((session) => session.attempts.length > 1).length,
             daySessions.length,
           ),
           sampleSize: daySessions.length,
@@ -2394,7 +2396,7 @@ export const buildDailyTrends = (
             x: day,
             y: safeIntegerSum(
               daySessions.map((session) => session.representativeAmount),
-            `trends.${day}.total-payment-volume-${currency}`,
+              `trends.${day}.total-payment-volume-${currency}`,
             ),
             sampleSize: daySessions.length,
           };
@@ -2413,14 +2415,13 @@ export const buildDailyTrends = (
         points: sessionDays.map((day) => {
           const daySessions = (sessionsByDay.get(day) ?? []).filter(
             (session) =>
-              session.currency === currency &&
-              session.outcome === "succeeded",
+              session.currency === currency && session.outcome === "succeeded",
           );
           return {
             x: day,
             y: safeIntegerSum(
               daySessions.map((session) => session.representativeAmount),
-            `trends.${day}.successful-payment-volume-${currency}`,
+              `trends.${day}.successful-payment-volume-${currency}`,
             ),
             sampleSize: daySessions.length,
           };

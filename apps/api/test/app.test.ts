@@ -386,8 +386,7 @@ describe("merchant intelligence HTTP API", () => {
     expect(
       segments.page.items.every((segment) =>
         segment.metrics.every(
-          (metric) =>
-            metric.traceability?.referencePopulation !== undefined,
+          (metric) => metric.traceability?.referencePopulation !== undefined,
         ),
       ),
     ).toBe(true);

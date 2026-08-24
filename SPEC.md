@@ -2,10 +2,13 @@
 
 ## Product specification
 
-**Challenge:** Zarinpal Challenge  
-**Specification status:** Foundation baseline  
-**Current delivery phase:** Project Foundation + Product Specification + Frontend Foundation  
-**Product owner for this phase:** Fatima  
+**Challenge:** Zarinpal Challenge
+
+**Specification status:** Implemented core under integration hardening
+
+**Current delivery phase:** Core dashboard + API integration + correctness hardening
+
+**Product owner for this phase:** Fatima
 **Canonical scope:** This document defines the product promise, judging alignment, requirements, ownership boundaries, constraints, and definition of done. Supporting documents expand these rules without replacing them.
 
 ## 1. Product definition
@@ -103,14 +106,14 @@ A proposed contract is not final until the teammate explicitly approves it. Shar
 
 The specification preserves all 300 available points.
 
-| Judging dimension              |  Points | Product obligation                                                                                                                                                                                                                   |
-| ------------------------------ | ------: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Actionability and Novelty      |      90 | Each meaningful insight connects a concrete number to a clear business implication and an actionable recommendation. Charts alone do not satisfy this dimension.                                                                     |
-| Accuracy and Traceability      |      75 | Every important number or claim can be traced to its data subset, filters, date range, sample size, formula or calculation, compared groups, missing-data handling, and limitations.                                                 |
-| Analytical Depth               |      60 | The future teammate-owned analytical engine may cover hypotheses, tests, segmentation, relationship and temporal analysis, retry analysis, and confounder control. This specification defines presentation needs, not those methods. |
-| UX for Non-Technical Merchants |      45 | Important findings are immediately understandable in merchant language, with advanced evidence available through progressive disclosure.                                                                                             |
-| Technical Quality              |      30 | The delivered product runs, is maintainable and reproducible, has a clear structure, includes useful documentation and tests, and supports a professional demo.                                                                      |
-| **Total**                      | **300** |                                                                                                                                                                                                                                      |
+| Judging dimension              |  Points | Product obligation                                                                                                                                                                                 |
+| ------------------------------ | ------: | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Actionability and Novelty      |      90 | Each meaningful insight connects a concrete number to a clear business implication and an actionable recommendation. Charts alone do not satisfy this dimension.                                   |
+| Accuracy and Traceability      |      75 | Every important number or claim can be traced to its data subset, filters, date range, sample size, formula or calculation, compared groups, missing-data handling, and limitations.               |
+| Analytical Depth               |      60 | The teammate-owned engine currently supplies validated summaries, ranked insights, retry-aware trends, peer comparisons, and descriptive segments. Method changes still require teammate approval. |
+| UX for Non-Technical Merchants |      45 | Important findings are immediately understandable in merchant language, with advanced evidence available through progressive disclosure.                                                           |
+| Technical Quality              |      30 | The delivered product runs, is maintainable and reproducible, has a clear structure, includes useful documentation and tests, and supports a professional demo.                                    |
+| **Total**                      | **300** |                                                                                                                                                                                                    |
 
 Detailed judging evidence is maintained in [`docs/product/judging-rubric.md`](docs/product/judging-rubric.md).
 
@@ -130,7 +133,7 @@ Let a merchant move from a simple explanation to supporting detail without losin
 
 ### Traceability
 
-Provide a clear route from every important claim to the analytical context needed to assess it. A future drawer, expandable panel, modal, evidence card, formula breakdown, or source-data summary may provide this progressive disclosure.
+Provide a clear route from every important claim to the analytical context needed to assess it. The current dashboard uses an accessible traceability drawer with metric, formula, filters, dates, sample, comparison population, missing-data handling, assumptions, provenance, and limitations when supplied.
 
 ### Segmentation presentation
 
@@ -208,7 +211,7 @@ The teammate owns calculation, evidence, filter application, formula, sample siz
 
 ## 7. Product requirements
 
-These levels describe the intended product, not permission to implement teammate-owned analytical work during the foundation phase.
+These levels describe the intended product, not permission to change teammate-owned analytical work during integration hardening.
 
 ### Must Have
 
@@ -265,7 +268,7 @@ These are requirements for product correctness. They do not authorize frontend c
 
 ### Payment Session versus Payment Attempt
 
-The dataset includes repeated payment attempts. The product and future analytical layer must explicitly distinguish:
+The dataset includes repeated payment attempts. The product and analytical layer must explicitly distinguish:
 
 ```text
 Payment Session
@@ -292,15 +295,15 @@ Therefore:
 
 ### Missing data
 
-Some fields contain significant missing values. The future analytical layer must explicitly document and handle missingness. The product must show supplied missingness information and limitations where they affect interpretation; it must not silently imply complete data.
+Some fields contain significant missing values. The analytical layer must explicitly document and handle missingness. The product must show supplied missingness information and limitations where they affect interpretation; it must not silently imply complete data.
 
 ### Merchant concentration
 
-Transaction volume is concentrated among some merchants. Future comparisons and global metrics must account for this where relevant. The UI must surface teammate-supplied concentration caveats instead of presenting a global aggregate as automatically representative.
+Transaction volume is concentrated among some merchants. Comparisons and global metrics must account for this where relevant. The UI surfaces teammate-supplied concentration caveats instead of presenting a global aggregate as automatically representative.
 
 ### Confounding variables
 
-Naive merchant-to-merchant comparisons may mislead. Future teammate-owned analysis may need to control for category, amount, attempt distribution, time, merchant characteristics, and other relevant variables. The frontend must not assert that a comparison is fair, causal, or controlled unless the approved analytical output says so.
+Naive merchant-to-merchant comparisons may mislead. Teammate-owned analysis may need to control for category, amount, attempt distribution, time, merchant characteristics, and other relevant variables. The frontend must not assert that a comparison is fair, causal, or controlled unless the approved analytical output says so.
 
 ### Dataset size and serving
 
@@ -346,26 +349,37 @@ The design must account for responsive analytics cards, responsive filters, mobi
 - Any contract change must explain why it is needed, identify compatibility effects, and be coordinated rather than silently implemented.
 - Maintain reproducible setup, format checks, linting, typechecking, component or smoke tests, and a production build.
 
-## 11. Current foundation phase
+## 11. Current integration-hardening phase
 
-This phase delivers professional governance, product requirements, judging alignment, frontend architecture and design guidance, Git workflow, integration boundaries, a clean frontend scaffold, and a minimal polished application shell.
+The core local product now includes a read-only file-backed API and a responsive
+merchant dashboard. The frontend consumes runtime-validated summaries,
+backend-ranked insights, trends, segments, filter capabilities, canonical scope,
+warnings, and provenance. It provides independent request states, traceability,
+accessible keyboard interactions, safe theme persistence, and truthful mobile
+presentation without bundled analytical fixtures.
 
-The shell may contain global layout, navigation, the application name, a placeholder merchant-intelligence route, theme tokens, responsive typography, and one representative state. It must not contain a fabricated dashboard or fake merchant findings. Temporary content must say `Demo / Placeholder`.
-
-No backend, data pipeline, database schema, numerical calculations, or production analytics are part of this phase.
+This implementation is not a production deployment. Shared schemas are still
+`DRAFT — REQUIRES TEAMMATE APPROVAL`; tenant authorization, persistent or
+streaming production storage, request-cost controls, monitoring, representative
+load tests, and deployment infrastructure remain open. Teammate-owned formulas,
+thresholds, ranking, segmentation, data transformations, and contract semantics
+were audited but were not changed by the frontend hardening work.
 
 ## 12. Definition of Done
 
-### Foundation phase
+### Core integration hardening
 
-The foundation is complete when:
+This phase is complete when:
 
-- Repository governance and ownership boundaries are explicit and usable by future contributors and agents.
-- Product vision, all five judging dimensions, insight principles, data constraints, roadmap, frontend architecture, design system, responsive approach, traceability UX, integration boundaries, and Git workflow are documented.
-- All proposed shared interfaces are visibly marked `DRAFT — REQUIRES TEAMMATE APPROVAL`.
-- The frontend scaffold uses strict TypeScript and contains only a minimal, polished, responsive shell with truthful placeholder labeling.
-- Setup is reproducible, dependencies are explainable, and the actual install, format check, lint, typecheck, tests, and production build have been run or any environmental blocker is reported accurately.
-- No teammate-owned backend, database, pipeline, analytics, calculations, or numerical tests have been implemented.
+- ownership boundaries and the draft-contract approval status remain explicit;
+- the browser validates untrusted payloads and never invents analytical meaning;
+- the core merchant journey handles loading, empty, partial, unavailable, stale,
+  and invalid-response states without displaying obsolete claims as current;
+- traceability and limitations are accessible from important metrics and insights;
+- date filters serialize inclusive calendar days using the declared IANA timezone;
+- frontend and API quality gates pass and CI reproduces them;
+- remaining production, analytical-approval, performance, and security gaps are
+  documented without overstating readiness.
 
 ### Polished challenge submission
 

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This roadmap preserves the complete product direction while keeping the current foundation phase narrow. It sequences product, analytical, backend, frontend, validation, and demo work without transferring ownership between teammates.
+This roadmap records the implemented local core and the work still required for an approved, production-ready submission. Status describes repository evidence, not analytical approval, production readiness, or a transfer of ownership.
 
 [`SPEC.md`](../../SPEC.md) remains canonical for requirements and boundaries. Roadmap placement is not authorization for Fatima or frontend agents to implement teammate-owned data, analytics, backend, or database work.
 
@@ -22,26 +22,26 @@ until explicitly approved.
 
 ## Roadmap at a glance
 
-| Phase | Name                      | Primary ownership | Status  | Outcome                                                                               |
-| ----: | ------------------------- | ----------------- | ------- | ------------------------------------------------------------------------------------- |
-|     1 | Project Foundation        | Fatima            | Current | Governance, specification, frontend foundation, and documented integration boundaries |
-|     2 | Dataset Engineering       | Teammate          | Planned | Clean, documented, reproducible analytical dataset inputs                             |
-|     3 | Analytical Definitions    | Teammate          | Planned | Approved units, metrics, comparison rules, and analytical definitions                 |
-|     4 | Backend Data Layer        | Teammate          | Planned | Teammate-selected storage and data-serving implementation                             |
-|     5 | Merchant Overview         | Shared            | Planned | Correct merchant summary outputs presented in a clear overview                        |
-|     6 | Insight Engine            | Teammate          | Planned | Validated insights, evidence, impacts, recommendations, and limitations               |
-|     7 | Traceability Engine       | Teammate          | Planned | Reproducible evidence and calculation context for important claims                    |
-|     8 | Merchant Dashboard        | Fatima            | Planned | Decision-first frontend journey across overview and insights                          |
-|     9 | Segmentation              | Shared            | Planned | Teammate-defined segments explained and visualized by the frontend                    |
-|    10 | Advanced Analysis         | Shared            | Planned | Deeper validated analysis communicated without losing merchant clarity                |
-|    11 | Traceability UX           | Fatima            | Planned | Accessible progressive disclosure from claim to evidence                              |
-|    12 | Advanced Filters          | Shared            | Planned | Clear frontend filtering backed by correct backend computation                        |
-|    13 | Mobile Optimization       | Fatima            | Planned | Complete, touch-friendly mobile experience with evidence access                       |
-|    14 | Performance               | Shared            | Planned | Responsive frontend and efficient backend/data serving at realistic scale             |
-|    15 | Testing & Correctness     | Shared            | Planned | Layer-appropriate automated validation and end-to-end confidence                      |
-|    16 | Demo Preparation          | Shared            | Planned | Reproducible, honest, rubric-aligned desktop and mobile demonstration                 |
-|    17 | Advanced / Bonus Features | Shared by feature | Planned | High-value differentiators added only after the core journey is sound                 |
-|    18 | Final UX Polish           | Fatima            | Planned | Coherent, accessible, presentation-ready experience without analytical drift          |
+| Phase | Name                      | Primary ownership | Status                              | Outcome                                                                                       |
+| ----: | ------------------------- | ----------------- | ----------------------------------- | --------------------------------------------------------------------------------------------- |
+|     1 | Project Foundation        | Fatima            | Complete locally                    | Governance, specification, workspace, and documented ownership boundaries                     |
+|     2 | Dataset Engineering       | Teammate          | Partial; approval needed            | Strict JSON and challenge `.csv.gz` ingestion exists; production operations remain open       |
+|     3 | Analytical Definitions    | Teammate          | Implemented draft; approval needed  | Units, metrics, peer rules, and caveats exist with tests; semantics remain teammate-owned     |
+|     4 | Backend Data Layer        | Teammate          | Local core                          | Read-only file repository and API exist; persistence, tenancy, and production controls remain |
+|     5 | Merchant Overview         | Shared            | Complete locally                    | API summary is runtime-validated and presented with scope and limitations                     |
+|     6 | Insight Engine            | Teammate          | Implemented draft; approval needed  | Ranked traceable insights are served; analytical approval remains open                        |
+|     7 | Traceability Engine       | Teammate          | Implemented draft; approval needed  | Evidence/formula/scope/provenance payloads exist under the draft contract                     |
+|     8 | Merchant Dashboard        | Fatima            | Complete locally                    | Decision-first overview and insight journey consume live API output                           |
+|     9 | Segmentation              | Shared            | Implemented draft; approval needed  | Backend descriptive segments are displayed without browser-derived labels or membership       |
+|    10 | Advanced Analysis         | Shared            | Partial; approval needed            | Retry, temporal, peer, and transformed-fee outputs exist; broader validation remains          |
+|    11 | Traceability UX           | Fatima            | Complete locally                    | Accessible drawer preserves context and backend evidence order                                |
+|    12 | Advanced Filters          | Shared            | Complete locally; contract draft    | Capability-driven controls and canonical applied scope are visible                            |
+|    13 | Mobile Optimization       | Fatima            | Complete locally; device QA pending | Responsive hierarchy, drawers, charts, tables, and touch targets implemented                  |
+|    14 | Performance               | Shared            | Open                                | Local measurement is recorded; representative-scale budgets/load tests remain                 |
+|    15 | Testing & Correctness     | Shared            | Substantial; E2E gap                | API numerical/integration tests and frontend contract/interaction tests exist with CI         |
+|    16 | Demo Preparation          | Shared            | Open                                | Production-like fixture, deployment candidate, and rehearsal remain                           |
+|    17 | Advanced / Bonus Features | Shared by feature | Deferred                            | Core approval and production controls take priority                                           |
+|    18 | Final UX Polish           | Fatima            | Hardened locally                    | Visual restraint, RTL accessibility, truthful states, and responsive polish completed         |
 
 ## Phase details
 

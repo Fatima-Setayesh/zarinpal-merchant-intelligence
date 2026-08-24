@@ -44,7 +44,7 @@ Token names express purpose, not a fixed hue. Status tokens require text or icon
 
 Tailwind utilities may compose layout and state styles, but repeated product semantics should become tokens or variants. Avoid arbitrary one-off colors, spacing, and shadows that erode hierarchy.
 
-Dark mode is a bonus, not a foundation requirement. Semantic tokens must keep it possible, but the team should implement it only after the primary theme meets contrast and demo requirements.
+Light and dark themes are implemented with semantic tokens. The query-string preference takes precedence over guarded local storage, both themes preserve chart/state semantics, and reduced-motion behavior remains independent of theme.
 
 ## Typography and number presentation
 
@@ -69,13 +69,12 @@ Dark mode is a bonus, not a foundation requirement. Semantic tokens must keep it
 
 ## Component strategy
 
-Add shadcn/ui components only when working UI consumes them. The likely roadmap includes Button, Card, Badge, Dialog, Sheet, Tabs, Tooltip, Select, Dropdown Menu, Table, Skeleton, Alert, Separator, Command, and Scroll Area, but the foundation must not install that entire list preemptively.
+Keep source-owned UI primitives only when production code consumes them. The current low-level set is Button, Card, Badge, Input, and Select; accessible product drawers, tabs, charts, errors, and loading states are feature components. Unreachable prototype primitives were removed.
 
 Component responsibilities:
 
 - `components/ui` contains low-level shadcn source components and semantic variants.
-- `components/shared` contains reusable product patterns such as the application shell or limitation notice.
-- feature directories contain domain presentation such as an insight card or evidence summary.
+- `features/merchant-intelligence/components` contains product patterns such as insight, evidence, scope, error, and filter experiences.
 - analytical definitions never live inside visual components.
 
 Every interactive component needs hover, focus-visible, active, disabled, loading, and error behavior where applicable. A disabled control should explain why it is unavailable when that reason is not obvious.
@@ -88,7 +87,7 @@ Use explicit, distinct states:
 - **Empty:** explain whether no data matched, data is unavailable, or the feature is not yet configured.
 - **Partial:** show available information and name what is missing.
 - **Error:** state the failed operation, preserve safe user input, and offer recovery.
-- **Demo / Placeholder:** visibly label all non-analytical foundation content.
+- **Invalid response:** reject the section and offer recovery rather than partially rendering an untrusted payload.
 
 Never present illustrative numbers, merchants, insights, or recommendations as live analytical output.
 
@@ -122,14 +121,9 @@ Motion should explain continuity, disclosure, or system feedback. Keep it short 
 - Announce consequential asynchronous state changes without excessive live-region noise.
 - Test zoom, text reflow, keyboard-only operation, and common screen-reader paths.
 
-## Official shadcn Skill
+## Component provenance
 
-The official shadcn/ui documentation recommends:
-
-```sh
-pnpm dlx skills add shadcn/ui
-```
-
-Source: [shadcn/ui Skills documentation](https://ui.shadcn.com/docs/skills).
-
-**Installation status:** not installed in this foundation run. The Codex skill installer was pointed at the official `shadcn-ui/ui` skill source, but GitHub name resolution failed in the execution environment. Retry the official command above when network access is available, then verify the installed files before updating this status. The Skill uses `components.json` for project context; its presence does not replace code review, accessibility checks, or the rule to add only needed components.
+`components.json` records shadcn/ui-compatible project conventions, while the
+small primitives in `components/ui` are reviewed source code committed with the
+application. No runtime component-system dependency or installation claim is
+required. Accessibility and product behavior are verified in this repository.

@@ -2,7 +2,7 @@
 
 ## Purpose and status
 
-This document defines the frontend foundation for the Merchant Decision Intelligence Platform. It is an implementation guide for the initial `apps/web` scaffold and future frontend work; it does not define backend, data, or analytical internals.
+This document describes the implemented `apps/web` architecture for the Merchant Decision Intelligence Platform. It governs frontend composition and integration behavior; it does not define backend, data, or analytical internals.
 
 The product flow is the governing architectural rule:
 
@@ -39,57 +39,57 @@ The teammate-owned analytical and backend systems own:
 
 Shared data contracts remain drafts until both owners approve them. Frontend code must not compensate for a missing contract by quietly recreating analytics in the browser.
 
-## Foundation decisions
+## Current decisions
 
-| Concern            | Decision                                              | Reason                                                                                            |
-| ------------------ | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| Repository layout  | A small pnpm workspace with the web app at `apps/web` | Leaves a clear team boundary without creating premature shared packages                           |
-| Runtime            | Client-side React application built by Vite           | Fast feedback and a small operational surface for the hackathon                                   |
-| Language           | TypeScript in strict mode                             | Makes integration assumptions visible and reduces unsafe UI states                                |
-| Styling            | Tailwind CSS v4 with semantic CSS-variable tokens     | Supports responsive composition while keeping theme decisions centralized                         |
-| Components         | shadcn/ui source components, added only when used     | Accessible primitives remain inspectable and adaptable without a second component system          |
-| Server state       | TanStack Query                                        | Gives API state explicit caching, cancellation, loading, and error behavior                       |
-| Local state        | React state and reducers close to their consumers     | Avoids a global state library before a demonstrated need exists                                   |
-| Routing            | No router in the one-page foundation                  | React Router should be added only when multiple navigable views create a real routing requirement |
-| Package management | pnpm with one root lockfile                           | Reproducible installs and simple workspace scripts                                                |
+| Concern            | Decision                                              | Reason                                                                                   |
+| ------------------ | ----------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Repository layout  | A small pnpm workspace with the web app at `apps/web` | Leaves a clear team boundary without creating premature shared packages                  |
+| Runtime            | Client-side React application built by Vite           | Fast feedback and a small operational surface for the hackathon                          |
+| Language           | TypeScript in strict mode                             | Makes integration assumptions visible and reduces unsafe UI states                       |
+| Styling            | Tailwind CSS v4 with semantic CSS-variable tokens     | Supports responsive composition while keeping theme decisions centralized                |
+| Components         | shadcn/ui source components, added only when used     | Accessible primitives remain inspectable and adaptable without a second component system |
+| Server state       | TanStack Query                                        | Gives API state explicit caching, cancellation, loading, and error behavior              |
+| Local state        | React state and reducers close to their consumers     | Avoids a global state library before a demonstrated need exists                          |
+| Routing            | No router for the single product surface              | Add routing only when multiple navigable views create a real lifecycle requirement       |
+| Package management | pnpm with one root lockfile                           | Reproducible installs and simple workspace scripts                                       |
 
-No charting library, form framework, global state manager, AI SDK, or HTTP wrapper belongs in the foundation without an implemented use case. Native `fetch` is sufficient behind a typed query function when an approved API exists. Vercel AI SDK and AI Elements remain optional bonus-roadmap tools, not decorative dependencies.
+No charting library, form framework, global state manager, AI SDK, or HTTP wrapper is currently needed. Native `fetch` sits behind a runtime-validated client; an accessible SVG/table component handles the small trend surface. Vercel AI SDK and AI Elements remain optional roadmap tools, not decorative dependencies.
 
 ## Runtime composition
 
 ```text
 main.tsx
-└── application providers
-    ├── TanStack Query provider
-    └── application shell
-        └── current page or route
-            └── feature composition
-                ├── shared presentation components
-                ├── shadcn/ui primitives
-                └── typed integration functions
+└── AppProviders (TanStack Query)
+    └── App
+        └── ProductErrorBoundary
+            └── MerchantIntelligenceDashboard
+                ├── api/ (runtime schemas, client, query hooks)
+                ├── model/ (scope serialization, formatting, theme)
+                ├── components/ (decision, KPI, chart, insights, scope)
+                └── source-owned UI primitives
 ```
 
 Providers must be few and purposeful. New cross-cutting providers require a documented consumer and lifecycle; they must not become a substitute for ordinary component composition.
 
 ## Source organization
 
-The initial scaffold should create only directories that contain working code:
+The current source tree contains only working production boundaries:
 
 ```text
 apps/web/src/
 ├── app/                 # root component and application providers
-├── components/
-│   ├── shared/          # product-aware reusable presentation
-│   └── ui/              # shadcn/ui source components
+├── components/ui/       # small source-owned primitives
+├── features/merchant-intelligence/
+│   ├── api/             # unknown-to-validated contract boundary and queries
+│   ├── components/      # accessible product presentation
+│   ├── model/           # non-analytical display and interaction policy
+│   └── merchant-intelligence-dashboard.tsx
 ├── lib/                 # framework utilities and query-client setup
-├── routes/              # current page-level composition
 ├── styles/              # global Tailwind import and design tokens
 └── test/                # test environment setup
 ```
 
-Create a `features/<feature-name>` directory only when a real feature has components, hooks, queries, or tests to colocate. Likely future feature boundaries include merchant overview, insights, traceability, segments, and filters, but empty folders do not establish architecture.
-
-Create shared `types` only after a contract has been reviewed. Until then, proposed interfaces belong in `docs/integration/draft-contracts.md` and must be marked **DRAFT — REQUIRES TEAMMATE APPROVAL**.
+The earlier parallel placeholder/dashboard generations were removed after the entry graph proved them unreachable. Contract types live beside runtime schemas because they are consumed there, while the canonical proposals remain **DRAFT — REQUIRES TEAMMATE APPROVAL** in `docs/integration/draft-contracts.md`.
 
 ## Component and dependency rules
 
@@ -103,12 +103,12 @@ Create shared `types` only after a contract has been reviewed. Until then, propo
 
 ## Data and state flow
 
-Once an API contract is approved, the expected flow is:
+The implemented flow is:
 
 1. The user changes a frontend-owned control such as a date range or merchant filter.
-2. The frontend validates the interaction state and maps it to approved request parameters.
+2. The frontend validates calendar and range interaction state and maps only API-advertised dimensions to draft request parameters.
 3. A feature query creates a stable query key and calls the typed integration function.
-4. The backend performs filtering and analytical computation and returns approved display data plus traceability metadata.
+4. The backend performs filtering and analytical computation and returns display data plus traceability metadata; these contract semantics still require teammate approval.
 5. The frontend renders success, loading, empty, partial, or error states without inventing missing values.
 6. Evidence and limitations remain reachable from the insight that they support.
 
@@ -137,7 +137,7 @@ Contract changes to insights, evidence, metrics, segments, chart data, paginatio
 
 ## Routing decision
 
-The foundation has one product surface, so a router would add lifecycle and test surface without user value. Add React Router when there are at least two genuinely navigable views, deep links are required, or browser history must represent product state. At that point, document route ownership, not-found behavior, error boundaries, and which filter state is safe to encode in URLs.
+The application has one product surface, so a router would add lifecycle and test surface without user value. Add React Router when there are at least two genuinely navigable views, deep links are required, or browser history must represent product state. Theme is the only current query/local-storage preference; analytical filters are not persisted as an unapproved URL contract.
 
 ## Quality gates
 
@@ -148,9 +148,7 @@ The web package must expose scripts for:
 - deterministic unit/component tests with Vitest and Testing Library;
 - a production Vite build.
 
-The workspace must also expose Prettier write and check scripts. The initial smoke test should render the application through its real providers and assert the application identity and explicit `Demo / Placeholder` state. It must not require an API or assert invented merchant metrics.
-
-Future feature tests should prioritize user-observable behavior, keyboard interaction, state transitions, contract mapping, and traceability access. Numerical correctness remains covered by teammate-owned analytical tests.
+The workspace also exposes Prettier write/check scripts and a CI workflow. Tests cover the real provider tree, runtime schema rejection, typed error recovery, canonical scope serialization, timezone boundaries, keyboard tabs, safe theme storage, error containment, chart semantics, drawers, traceability access, and faithful backend prose. Numerical correctness remains covered by teammate-owned analytical tests.
 
 ## Accessibility, resilience, and performance
 

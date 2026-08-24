@@ -38,6 +38,14 @@ require `Authorization: Bearer <token>`; `/api/v1/health` and CORS preflight
 requests remain unauthenticated. Keep the token out of source control and use a
 deployment secret manager in hosted environments.
 
+The web client intentionally has no bearer-token setting. A `VITE_*` value is
+public bundle content and cannot protect a long-lived API credential. Hosted
+deployments should expose `/api/v1` through a same-origin trusted gateway or
+backend-for-frontend that authenticates the user and adds the service token on
+the server side. Direct browser-to-API bearer authentication requires a real
+short-lived user-token design and is not implemented. See the
+[browser/API deployment decision](../../docs/integration/browser-api-deployment.md).
+
 ## Input data
 
 `PAYMENTS_DATA_PATH` points to UTF-8 JSON containing either an array or an
@@ -57,6 +65,12 @@ Duplicate attempts, invalid values, and sessions spanning merchants are
 rejected. Sessions spanning currencies and currency totals outside JavaScript's
 safe-integer range are also rejected rather than rounded. A SHA-256 identifier
 of the source document is attached to analytical provenance.
+
+The repository also accepts the challenge `.csv.gz` shape. It streams and
+validates the compressed input, but the current analytical process retains the
+validated attempt/session model in memory. JSON input is read and parsed as a
+whole document. Size, memory, concurrency, and reload policy must therefore be
+validated against the production dataset before deployment.
 
 Payment Sessions are reconstructed by `sessionId`. A session succeeds when an
 attempt succeeds; successful volume counts the first successful attempt once.

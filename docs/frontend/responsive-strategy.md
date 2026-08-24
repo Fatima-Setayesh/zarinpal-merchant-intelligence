@@ -66,7 +66,7 @@ Do not truncate material limitations or metric names without an accessible path 
 
 ## Navigation and disclosures
 
-The one-page foundation does not need React Router. When navigation grows, keep browser history, deep links, and back behavior predictable across sizes. Opening a mobile sheet must trap focus appropriately, prevent background interaction, offer an obvious close path, and return focus to its trigger.
+The one-page product does not need React Router. Native modal dialogs prevent background interaction, establish focus on entry, support Escape/close controls, and return focus to the originating filter, metric, trend, or evidence trigger.
 
 Evidence disclosure must preserve the originating insight. A user closing evidence should return to the same scroll and focus context rather than the top of the page.
 
@@ -86,10 +86,10 @@ Keep DOM order aligned with the reading and focus order; CSS reordering must not
 ## Performance considerations
 
 - Keep initial JavaScript and CSS small enough for a typical mobile connection and device.
-- Defer genuinely heavy evidence or visualization code until requested, once such features exist.
+- Keep evidence and visualization components dependency-light; introduce lazy loading only when a measured secondary bundle warrants it.
 - Avoid loading desktop-only assets on mobile.
 - Reserve layout space for asynchronous content to prevent disruptive shifts.
-- Use responsive image sizing for future raster assets.
+- Avoid raster assets when typography, CSS, and semantic SVG already communicate the product.
 
 ## Verification matrix
 

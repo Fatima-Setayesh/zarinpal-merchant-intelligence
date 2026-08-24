@@ -24,6 +24,21 @@ The frontend must never calculate business metrics, reproduce analytical logic, 
 
 All schemas in [draft-contracts.md](./draft-contracts.md) remain proposals until both owners approve them.
 
+## Current implementation status
+
+The local API currently emits the draft shapes and the browser validates every
+success/error envelope at runtime before rendering it. TanStack Query owns
+independent summary, insight, trend, and segment lifecycles; query abort signals
+reach `fetch`; active scope comes from the canonical response echo rather than
+the request draft. This implementation evidence does not finalize the schemas:
+they remain **DRAFT — REQUIRES TEAMMATE APPROVAL**.
+
+The frontend preserves backend observation, business-impact, recommendation,
+priority, label, definition, disclosure, and limitation text. It translates
+only UI terminology and generic recovery/state copy. It does not synthesize a
+confidence value, stable status, anomaly, opportunity rank, segment meaning, or
+analytical recommendation.
+
 ## Ownership at a glance
 
 | Area        | Teammate-owned analytical/backend responsibility                                                   | Fatima-owned product/frontend responsibility                                              |
@@ -141,7 +156,7 @@ Every approved integration must preserve the following context:
 
 ## Integration handshake
 
-Before the frontend treats an endpoint as integrated, both owners should agree on:
+Before either owner treats the current draft integration as approved, both owners should agree on:
 
 1. The relevant draft schema and version/change policy.
 2. Which fields are required, nullable, or omitted.

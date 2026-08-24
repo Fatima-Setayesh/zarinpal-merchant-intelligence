@@ -14,15 +14,17 @@ Insight
 ├── Business Impact
 ├── Recommended Action
 └── Evidence
-    ├── Metric and definition
-    ├── Formula or method summary
-    ├── Data subset and filters
-    ├── Date range and freshness
-    ├── Sample size and unit of analysis
-    ├── Compared groups
-    ├── Missing-data handling
-    ├── Limitations
-    └── Provenance or method version
+    ├── 1. Metric and definition
+    ├── 2. Value, unit, and required disclosure
+    ├── 3. Data subset and filters
+    ├── 4. Date range and timezone
+    ├── 5. Sample size and unit of analysis
+    ├── 6. Formula or method summary
+    ├── 7. Compared groups or reference population
+    ├── 8. Missing-data handling
+    ├── 9. Assumptions
+    ├── 10. Limitations
+    └── 11. Dataset and source provenance
 ```
 
 These fields describe frontend presentation needs, not a finalized API. Their contract must remain marked **DRAFT — REQUIRES TEAMMATE APPROVAL** until reviewed.
@@ -35,13 +37,13 @@ Do not use a tooltip as the only path to traceability. Tooltips are unsuitable f
 
 ## Disclosure pattern
 
-Use progressive disclosure:
+The implemented experience uses progressive disclosure:
 
 1. The insight surface shows the observation, business impact, recommended action, key evidence, and any critical limitation.
 2. An evidence summary shows scope, period, sample size, unit of analysis, and comparison at a glance.
 3. Detailed sections reveal formula/method, filters, missingness, provenance, and full limitations.
 
-On wider screens, a side sheet or anchored evidence panel can preserve the insight context. On narrow screens, use a full-height sheet or page-like disclosure with a visible title and close/back control. Deep evidence may use expandable sections, but critical limitations must not default to hidden.
+On wider screens, a native modal side drawer preserves the insight context. On narrow screens it becomes a page-like full-height drawer with a visible title and close control. Closing restores focus to the invoking metric, trend, or evidence control. Raw source rows are intentionally unavailable to the browser.
 
 ## Evidence content requirements
 

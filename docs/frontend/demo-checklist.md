@@ -12,7 +12,7 @@ Use this checklist before a judged desktop or mobile demonstration. Check an ite
 - [ ] Verify that the demo does not depend on an uncommitted local file or cache.
 - [ ] Prepare a truthful fallback for unavailable network or teammate-owned services.
 
-For the planned workspace scripts, the expected verification sequence is:
+The repository verification sequence is:
 
 ```sh
 pnpm install --frozen-lockfile
@@ -23,7 +23,7 @@ pnpm test
 pnpm build
 ```
 
-This document does not claim that these commands have been executed; report actual results separately.
+Record the exact execution result and environment for the build being demonstrated; a previous audit result is not proof for a later build.
 
 ## Product narrative
 
@@ -36,12 +36,12 @@ This document does not claim that these commands have been executed; report actu
 
 ## Truthfulness and ownership
 
-- [ ] Label foundation-only or illustrative content **Demo / Placeholder**.
+- [ ] Confirm that no illustrative analytical content is bundled or shown as live output.
 - [ ] Do not present invented merchants, metrics, insights, or recommendations as analytical output.
 - [ ] Confirm that the frontend does not calculate backend-owned business metrics.
 - [ ] Confirm teammate approval for the contracts used by the demonstrated build.
 - [ ] Obtain teammate confirmation of demonstrated numerical definitions and analytical correctness.
-- [ ] Do not imply that planned backend, analytics, data, or AI features are implemented.
+- [ ] Describe the local API and dashboard accurately while keeping production, approval, and AI work explicitly open.
 
 ## Correctness-sensitive content
 

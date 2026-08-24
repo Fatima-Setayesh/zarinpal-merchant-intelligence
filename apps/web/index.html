@@ -17,17 +17,29 @@
     />
     <title>Zarinpal Merchant Intelligence</title>
     <script>
-      const savedTheme = localStorage.getItem("merchant-intelligence-theme");
-      const theme =
-        savedTheme === "dark" || savedTheme === "light"
-          ? savedTheme
-          : window.matchMedia("(prefers-color-scheme: dark)").matches
-            ? "dark"
-            : "light";
-      document.documentElement.dataset.previewTheme = theme;
-      document.documentElement.classList.toggle("dark", theme === "dark");
-      document.querySelector('meta[name="theme-color"]').content =
-        theme === "dark" ? "#0d0f14" : "#f4f5f7";
+      (() => {
+        let savedTheme = null;
+        try {
+          savedTheme = localStorage.getItem("merchant-intelligence-theme");
+        } catch {
+          savedTheme = null;
+        }
+        const requestedTheme = new URLSearchParams(location.search).get(
+          "theme",
+        );
+        const theme =
+          requestedTheme === "dark" || requestedTheme === "light"
+            ? requestedTheme
+            : savedTheme === "dark" || savedTheme === "light"
+              ? savedTheme
+              : window.matchMedia("(prefers-color-scheme: dark)").matches
+                ? "dark"
+                : "light";
+        document.documentElement.dataset.theme = theme;
+        document.documentElement.classList.toggle("dark", theme === "dark");
+        document.querySelector('meta[name="theme-color"]').content =
+          theme === "dark" ? "#0d0f14" : "#f4f5f7";
+      })();
     </script>
   </head>
   <body>
